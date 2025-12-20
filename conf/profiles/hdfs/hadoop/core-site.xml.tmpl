@@ -3,12 +3,14 @@
   <!-- Default filesystem -->
   <property>
     <name>fs.defaultFS</name>
-    <value>hdfs://localhost:9000</value>
+    <value>hdfs://localhost:8020</value>
   </property>
 
-  <!-- Hadoop temp directory -->
+  <!-- Hadoop temp directory (keep all state under BASE_DIR) -->
   <property>
     <name>hadoop.tmp.dir</name>
-    <value>/Users/${user.name}/data/local/hadoop/tmp</value>
+    <value>{{BASE_DIR}}/state/hadoop/tmp</value>
   </property>
 </configuration>
+
+

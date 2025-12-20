@@ -47,13 +47,10 @@ ld_usage() {
 local-data: manage a local Hadoop (HDFS + YARN) + Hive stack.
 
 Profiles
-  local-data profile init               Copy repo profiles into \$BASE_DIR for local edits
+  local-data profile init [--force]     Copy repo profiles into \$BASE_DIR for local edits
   local-data profile list               List available profiles
   local-data profile set <name>         Set active profile and apply runtime config overlay
-
-Runtime Config Overlay (no Homebrew mutation)
-  local-data conf apply [--profile <name>]   Materialize \$BASE_DIR/conf/current/{hadoop,hive,spark}
-  local-data conf check                      Verify required config files exist in the overlay
+  local-data profile check              Verify required config files exist in the runtime overlay
 
 Environment
   local-data env doctor [<command...>]       Check required deps (warn on optional)
@@ -89,13 +86,21 @@ profile)
     shift || true
     case "$sub" in
     init)
-        ld_profile_init "$REPO_ROOT" "$BASE_DIR"
+        force=0
+        if [ "${1:-}" = "--force" ]; then
+            force=1
+            shift || true
+        fi
+        ld_profile_init "$REPO_ROOT" "$BASE_DIR" "$force"
         ;;
     list)
         ld_profile_list "$REPO_ROOT" "$BASE_DIR"
         ;;
     set)
         ld_profile_set "$REPO_ROOT" "$BASE_DIR" "${1:-}"
+        ;;
+    check)
+        ld_conf_check "$BASE_DIR"
         ;;
     *)
         ld_die "Unknown subcommand: profile $sub"
@@ -104,25 +109,7 @@ profile)
     ;;
 
 conf)
-    sub="${1:-}"
-    shift || true
-    case "$sub" in
-    apply)
-        profile=""
-        if [ "${1:-}" = "--profile" ]; then
-            shift
-            profile="${1:-}"
-            shift || true
-        fi
-        ld_conf_apply "$REPO_ROOT" "$BASE_DIR" "$profile"
-        ;;
-    check)
-        ld_conf_check "$BASE_DIR"
-        ;;
-    *)
-        ld_die "Unknown subcommand: conf $sub"
-        ;;
-    esac
+    ld_die "The 'conf' command was removed. Use: local-data profile set <name> (applies overlay) or local-data profile check"
     ;;
 
 env)

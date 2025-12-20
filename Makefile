@@ -1,7 +1,9 @@
 .PHONY: format perms path
 
 format:
-	shfmt -i 4 -sr -w bin/local-data lib/local_data/**/*.sh
+	@command -v shfmt >/dev/null 2>&1 || { echo "ERROR: shfmt not found. Install it (e.g. 'brew install shfmt')." >&2; exit 1; }
+	shfmt -i 4 -sr -w bin/local-data bin/hive-b
+	find lib/local_data -type f -name '*.sh' -print0 | xargs -0 shfmt -i 4 -sr -w
 
 perms:
 	chmod +x bin/local-data bin/hive-b

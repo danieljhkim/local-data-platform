@@ -49,7 +49,9 @@ ld_env_print() {
 
     java_home="${JAVA_HOME:-}"
     if [ -z "$java_home" ] && command -v /usr/libexec/java_home > /dev/null 2>&1; then
-        java_home="$(/usr/libexec/java_home 2> /dev/null || true)"
+        # Prefer a supported LTS JDK for Hadoop/Hive (Java 17), but fall back
+        # to whatever macOS reports if 17 isn't installed.
+        java_home="$(/usr/libexec/java_home -v 17 2> /dev/null || /usr/libexec/java_home 2> /dev/null || true)"
     fi
 
     [ -n "$hadoop_home" ] || ld_die "Could not determine HADOOP_HOME (install Homebrew Hadoop or set HADOOP_HOME)"

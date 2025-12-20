@@ -11,6 +11,4 @@ local_data="$script_dir/local-data"
 
 exec "$local_data" env exec -- beeline \
     -u "jdbc:hive2://localhost:10000" \
-    -n "${HIVE_USER:-$(whoami)}" \
-    -p "${HIVE_PASSWORD:-password}" \
     "$@"

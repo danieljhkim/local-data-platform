@@ -3,22 +3,24 @@
   <!-- Default filesystem -->
   <property>
     <name>fs.defaultFS</name>
-    <value>hdfs://localhost:9000</value>
+    <value>hdfs://localhost:8020</value>
   </property>
 
-  <!-- Hadoop temp directory -->
+  <!-- Hadoop temp directory (keep all state under BASE_DIR) -->
   <property>
     <name>hadoop.tmp.dir</name>
-    <value>/Users/${user.name}/data/local/hadoop/tmp</value>
+    <value>{{BASE_DIR}}/state/hadoop/tmp</value>
   </property>
 
   <!-- Allow local HiveServer2 user to proxy as local users (for doAs) -->
   <property>
-    <name>hadoop.proxyuser.daniel.hosts</name>
+    <name>hadoop.proxyuser.{{USER}}.hosts</name>
     <value>*</value>
   </property>
   <property>
-    <name>hadoop.proxyuser.daniel.groups</name>
+    <name>hadoop.proxyuser.{{USER}}.groups</name>
     <value>*</value>
   </property>
 </configuration>
+
+

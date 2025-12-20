@@ -85,7 +85,7 @@ You should see a single row with `1`.
 
 The default local profile lives at:
 
-- `conf/profiles/local/hive/hive-site.xml`
+- `conf/profiles/local/hive/hive-site.xml.tmpl` (rendered into `$BASE_DIR/conf/current/hive/hive-site.xml`)
 
 These properties must match what you created above:
 
@@ -100,7 +100,7 @@ These properties must match what you created above:
 </property>
 <property>
   <name>javax.jdo.option.ConnectionUserName</name>
-  <value>daniel</value>
+  <value>YOUR_USERNAME</value>
 </property>
 <property>
   <name>javax.jdo.option.ConnectionPassword</name>

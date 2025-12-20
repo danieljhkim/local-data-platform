@@ -29,7 +29,7 @@ ld_repo_root() {
 }
 
 ld_default_base_dir() {
-    echo "${BASE_DIR:-$HOME/data-eng/local-data-platform}"
+    echo "${BASE_DIR:-$HOME/local-data-platform}"
 }
 
 ld_state_dir() {

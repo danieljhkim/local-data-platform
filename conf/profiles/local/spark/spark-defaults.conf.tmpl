@@ -23,7 +23,7 @@ spark.sql.catalogImplementation  hive
 
 # IMPORTANT:
 # This must match your *local* Hive warehouse
-spark.sql.warehouse.dir          file:///Users/daniel/data/hive/warehouse
+spark.sql.warehouse.dir          file:{{BASE_DIR}}/state/hive/warehouse
 
 ########################################
 # Serialization
@@ -34,3 +34,5 @@ spark.serializer                 org.apache.spark.serializer.KryoSerializer
 # Logging (off by default for speed)
 ########################################
 spark.eventLog.enabled           false
+
+

@@ -12,6 +12,16 @@ ld_yarn_dirs() {
     echo "$sd"
 }
 
+ld_yarn_apply_overlay_env() {
+    # Ensure daemons use the runtime overlay config.
+    local base_dir="$1"
+    local conf_dir
+    conf_dir="$(ld_current_conf_dir "$base_dir")/hadoop"
+    if [ -d "$conf_dir" ]; then
+        export HADOOP_CONF_DIR="$conf_dir"
+    fi
+}
+
 ld_yarn_jps_pid() {
     local needle="$1"
     command -v jps > /dev/null 2>&1 || return 0
@@ -20,6 +30,8 @@ ld_yarn_jps_pid() {
 
 ld_yarn_start() {
     local base_dir="$1"
+
+    ld_yarn_apply_overlay_env "$base_dir"
 
     local sd log_dir pid_dir
     sd="$(ld_yarn_dirs "$base_dir")"
@@ -73,21 +85,39 @@ ld_yarn_start() {
 ld_yarn_stop() {
     local base_dir="$1"
 
+    ld_yarn_apply_overlay_env "$base_dir"
+
     local sd pid_dir
     sd="$(ld_yarn_dirs "$base_dir")"
     pid_dir="$sd/pids"
 
     for svc in nodemanager resourcemanager; do
         local pidfile="$pid_dir/${svc}.pid"
+        local pid=""
         if [ -f "$pidfile" ]; then
-            local pid
-            pid="$(cat "$pidfile")"
-            if kill -0 "$pid" 2> /dev/null; then
-                kill "$pid" || true
-                ld_log "Stopped YARN $svc (pid $pid)."
-            fi
-            rm -f "$pidfile"
+            pid="$(cat "$pidfile" 2> /dev/null || true)"
         fi
+
+        if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
+            kill "$pid" || true
+            ld_log "Stopped YARN $svc (pid $pid)."
+            rm -f "$pidfile"
+            continue
+        fi
+
+        # Fallback: if pidfile is missing/stale, try to find and stop via jps.
+        local needle jps_pid
+        if [ "$svc" = "resourcemanager" ]; then
+            needle="ResourceManager"
+        else
+            needle="NodeManager"
+        fi
+        jps_pid="$(ld_yarn_jps_pid "$needle" || true)"
+        if [ -n "$jps_pid" ] && kill -0 "$jps_pid" 2> /dev/null; then
+            kill "$jps_pid" || true
+            ld_log "Stopped YARN $svc (pid $jps_pid) via jps."
+        fi
+        rm -f "$pidfile"
     done
 }
 

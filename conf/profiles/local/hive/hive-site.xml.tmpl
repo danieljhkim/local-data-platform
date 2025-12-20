@@ -11,17 +11,17 @@
   </property>
   <property>
     <name>javax.jdo.option.ConnectionUserName</name>
-    <value>daniel</value>
+    <value>{{USER}}</value>
   </property>
   <property>
     <name>javax.jdo.option.ConnectionPassword</name>
     <value>password</value>
   </property>
 
-  <!-- Warehouse location on HDFS -->
+  <!-- Warehouse location -->
   <property>
     <name>hive.metastore.warehouse.dir</name>
-    <value>/user/hive/warehouse</value>
+    <value>file:{{BASE_DIR}}/state/hive/warehouse</value>
   </property>
 
   <!-- HiveServer2 settings -->
@@ -33,7 +33,6 @@
     <name>hive.server2.thrift.port</name>
     <value>10000</value>
   </property>
-
   <property>
     <name>hive.server2.authentication</name>
     <value>NONE</value>
@@ -43,3 +42,5 @@
     <value>false</value>
   </property>
 </configuration>
+
+

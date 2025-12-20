@@ -1,76 +1,72 @@
 
-# local-data-platform
+# local-data-platform (macOS)
 
-Local, single-machine Hadoop (HDFS + YARN) + Hive + spark environment manager
-with a small Bash CLI for macOS. 
+Local, single-machine Hadoop (HDFS + YARN) + Hive + spark environment manager 
+with a small Bash CLI. 
 
 What you get:
 
-- A modular `local-data` CLI to manage HDFS/YARN/Hive in one place.
+- A modular `local-data` CLI to manage HDFS/YARN/Hive/Spark in one place.
 - A runtime config overlay under `$BASE_DIR/conf/current` (hive-site.xml,
-  core-site.xml, logs, etc all lives here) to easily change between profiles.
+  core-site.xml, logs, data etc all lives here) to easily change between profiles and keep things organized.
 - Per-service logs + status + stop/start helpers
+- 2 profile choices:
+  1. **local**: local spark and hive on local filesytem metastore (in `$BASE_DIR/state/hive/warehouse`)
+  2. **hdfs**: YARN + NameNode + DataNode + spark + hive on hdfs
 
-**Other Docs:**
+Note: *default value of `$BASE_DIR`=/Users/yourname/local-data-platform*
 
-- Detailed setup: [QUICK_START.md](QUICK_START.md)
+**Prequisite Setup:**
+
 - Postgres Hive metastore setup: [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
+- Java 17
+- Homebrew
+- Hadoop + Hive (required)
+- Spark (recommended)
+
+Suggested installs:
+
+```bash
+brew install hadoop hive jdk@17 apache-spark postgresql
+```
 
 ---
 
 ## Quick start
 
 ```bash
-make perms
+# makes scrips executable
+make perms 
+# add this output to PATH
 make path
-local-data profile set local
+
+# instantiates local and hdfs profiles in $BASE_DIR/conf/profiles/
+local-data profile init
+# sets $BASE_DIR/conf/current to hdfs profile
+local-data profile set hdfs
+
+# starts YARN, nameNode, dataNode, hiveServer2, metastore
 local-data start
+
+# check the status of the processes
 local-data status
 local-data logs
-```
 
-Stop everything:
+# starts interactive beeline cli
+hive-b
 
-```bash
+# stop all
 local-data stop
-```
-
-If Hive ports are stuck (9083 metastore / 10000 hiveserver2):
-
-```bash
-local-data hive stop --force
-```
-
-## Prereqs
-
-- Java 17
-- Homebrew
-- Hadoop + Hive (required)
-- Spark (recommended)
-- Postgres (optional; only needed if your Hive profile uses it)
-
-Suggested installs:
-
-```bash
-brew install hadoop hive jdk@17
-brew install apache-spark   # optional
-brew install postgresql     # optional
-```
-
-Sanity checks:
-
-```bash
-local-data env doctor
-local-data env doctor start hive
 ```
 
 ## How it works
 
 - Profiles live in `conf/profiles/<name>/{hadoop,hive,spark}`.
-- `local-data profile set <name>` (or `local-data conf apply`) materializes a
-  runtime overlay at `$BASE_DIR/conf/current/{hadoop,hive,spark}`.
+- `local-data profile set <name>` materializes a runtime overlay at
+  `$BASE_DIR/conf/current/{hadoop,hive,spark}`.
 - `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`,
   `HIVE_CONF_DIR`, and `PATH` set to use the overlay.
+- `hive-b` invokes beeline cli
 
 ## Common commands
 
@@ -81,4 +77,6 @@ local-data status [hdfs|yarn|hive]
 local-data logs
 local-data hive logs
 local-data env exec -- hdfs dfs -ls /
+
+hive-b
 ```

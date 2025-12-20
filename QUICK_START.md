@@ -4,7 +4,7 @@ This guide sets up a **local, pseudo-distributed** environment on macOS for
 learning and development:
 
 - **Hadoop (HDFS + YARN)** running on your machine (single host)
-- **Hive** using a local metastore (Postgres) and storing data in HDFS
+- **Hive** using a local metastore (Postgres) and storing data in HDFS or local file system
 - **Spark** submitting jobs to YARN and reading/writing HDFS + Hive tables
 
 ---
@@ -48,7 +48,7 @@ Paste the printed export line into your shell profile (for zsh: `~/.zshrc`).
 By default, the CLI writes state under:
 
 ```text
-$HOME/data-eng/local-data-platform
+$HOME/local-data-platform
 ```
 
 Override with:
@@ -71,7 +71,7 @@ $BASE_DIR/
   state/
     hdfs/{logs,pids}/
     yarn/{logs,pids}/
-    hive/{logs,pids}/
+    hive/{logs,pids,warehouse}/
 ```
 
 ---
@@ -98,11 +98,10 @@ Activate a profile (also applies the runtime overlay):
 local-data profile set local
 ```
 
-Manually apply/check the overlay:
+Check the overlay:
 
 ```bash
-local-data conf apply
-local-data conf check
+local-data profile check
 ```
 
 Overlay output:
@@ -195,18 +194,6 @@ Credentials:
 
 ---
 
-## Formatting
-
-Format shell scripts:
-
-```bash
-make format
-```
-
-Note: don’t run `shfmt` on the Makefile (Make recipes require TAB
-indentation).
-
----
 
 ## Hive metastore notes
 

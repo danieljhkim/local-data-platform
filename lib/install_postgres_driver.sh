@@ -22,7 +22,7 @@ ensure_postgres_jdbc_jar() {
     # If Homebrew-managed dirs are not writable, fall back to a repo-owned
     # location and attach via HIVE_AUX_JARS_PATH.
     if [ ! -w "$dest_dir" ]; then
-        [ -n "${BASE_DIR:-}" ] || BASE_DIR="${HOME}/data-eng/local-data-platform"
+        [ -n "${BASE_DIR:-}" ] || BASE_DIR="${HOME}/local-data-platform"
         dest_dir="$BASE_DIR/lib/jars"
         jar="$dest_dir/postgresql-$version.jar"
         mkdir -p "$dest_dir"
