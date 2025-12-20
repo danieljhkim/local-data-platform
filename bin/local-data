@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# local-data: modular CLI for local Hadoop/Hive/Spark.
+#
+# Key principles:
+# - No mutation of Homebrew config dirs.
+# - Runtime config overlay under $BASE_DIR/conf/current.
+# - Thin dispatcher + small libraries in lib/local_data.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve repo root so this script can live at repo root OR in repo/bin
+if [ -d "$SCRIPT_DIR/conf" ]; then
+    REPO_ROOT="$SCRIPT_DIR"
+elif [ -d "$SCRIPT_DIR/../conf" ]; then
+    REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    echo "ERROR: Could not find 'conf/' directory next to script or one level up." >&2
+    exit 1
+fi
+
+LIB_DIR="$REPO_ROOT/lib/local_data"
+
+# shellcheck disable=SC1091
+source "$LIB_DIR/common.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/overlay.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/env.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/doctor.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/services/hdfs.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/services/yarn.sh"
+# shellcheck disable=SC1091
+source "$LIB_DIR/services/hive.sh"
+
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/install_postgres_driver.sh"
+
+BASE_DIR="$(ld_default_base_dir)"
+
+ld_usage() {
+    cat << USAGE
+local-data: manage a local Hadoop (HDFS + YARN) + Hive stack.
+
+Profiles
+  local-data profile init               Copy repo profiles into \$BASE_DIR for local edits
+  local-data profile list               List available profiles
+  local-data profile set <name>         Set active profile and apply runtime config overlay
+
+Runtime Config Overlay (no Homebrew mutation)
+  local-data conf apply [--profile <name>]   Materialize \$BASE_DIR/conf/current/{hadoop,hive,spark}
+  local-data conf check                      Verify required config files exist in the overlay
+
+Environment
+  local-data env doctor [<command...>]       Check required deps (warn on optional)
+                                            Examples: env doctor start hive | env doctor start yarn
+  local-data env print                       Print export statements for a hermetic environment
+  local-data env exec -- <cmd...>            Run a command with env + runtime overlay applied
+
+Services
+  local-data start [hdfs|yarn|hive]      Start one service (no arg = HDFS -> YARN -> Hive)
+  local-data stop  [hdfs|yarn|hive]      Stop one service (no arg = Hive -> YARN -> HDFS)
+  local-data status [hdfs|yarn|hive]     Show status for one service (no arg = all services)
+  local-data hive stop --force           Kill stale Hive listeners on 9083/10000 (safe-guarded)
+
+Logs
+  local-data hdfs logs                   Tail HDFS logs (NameNode/DataNode)
+  local-data yarn logs                   Tail YARN logs (ResourceManager/NodeManager)
+  local-data hive logs                   Tail Hive logs (metastore/HiveServer2)
+  local-data logs                        Follow all logs (-f mode, combined)
+USAGE
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+"" | "-h" | "--help" | "help")
+    ld_usage
+    exit 0
+    ;;
+
+profile)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+    init)
+        ld_profile_init "$REPO_ROOT" "$BASE_DIR"
+        ;;
+    list)
+        ld_profile_list "$REPO_ROOT" "$BASE_DIR"
+        ;;
+    set)
+        ld_profile_set "$REPO_ROOT" "$BASE_DIR" "${1:-}"
+        ;;
+    *)
+        ld_die "Unknown subcommand: profile $sub"
+        ;;
+    esac
+    ;;
+
+conf)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+    apply)
+        profile=""
+        if [ "${1:-}" = "--profile" ]; then
+            shift
+            profile="${1:-}"
+            shift || true
+        fi
+        ld_conf_apply "$REPO_ROOT" "$BASE_DIR" "$profile"
+        ;;
+    check)
+        ld_conf_check "$BASE_DIR"
+        ;;
+    *)
+        ld_die "Unknown subcommand: conf $sub"
+        ;;
+    esac
+    ;;
+
+env)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+    doctor)
+        target=""
+        if [ "${1:-}" = "--for" ]; then
+            shift
+        fi
+        # Remaining args become the doctor target, e.g. `start hive`.
+        if [ "$#" -gt 0 ]; then
+            target="$*"
+        fi
+        ld_doctor "$target"
+        ;;
+    print)
+        ld_env_print "$REPO_ROOT" "$BASE_DIR"
+        ;;
+    exec)
+        if [ "${1:-}" != "--" ]; then
+            ld_die "Usage: local-data env exec -- <cmd...>"
+        fi
+        shift
+        ld_env_exec "$REPO_ROOT" "$BASE_DIR" "$@"
+        ;;
+    *)
+        ld_die "Unknown subcommand: env $sub"
+        ;;
+    esac
+    ;;
+
+start)
+    target="${1:-}"
+    shift || true
+    # shellcheck disable=SC1090
+    eval "$(ld_env_print "$REPO_ROOT" "$BASE_DIR")"
+    case "$target" in
+    "")
+        echo "==> start hdfs"
+        ld_hdfs_start "$BASE_DIR"
+        echo
+        echo "==> start yarn"
+        ld_yarn_start "$BASE_DIR"
+        echo
+        echo "==> start hive"
+        ld_hive_start "$BASE_DIR"
+        ;;
+    hdfs) ld_hdfs_start "$BASE_DIR" ;;
+    yarn) ld_yarn_start "$BASE_DIR" ;;
+    hive) ld_hive_start "$BASE_DIR" ;;
+    *) ld_die "Unknown target: start $target" ;;
+    esac
+    ;;
+
+stop)
+    target="${1:-}"
+    shift || true
+    # shellcheck disable=SC1090
+    eval "$(ld_env_print "$REPO_ROOT" "$BASE_DIR")"
+    case "$target" in
+    "")
+        echo "==> stop hive"
+        ld_hive_stop "$BASE_DIR"
+        echo
+        echo "==> stop yarn"
+        ld_yarn_stop "$BASE_DIR"
+        echo
+        echo "==> stop hdfs"
+        ld_hdfs_stop "$BASE_DIR"
+        ;;
+    hdfs) ld_hdfs_stop "$BASE_DIR" ;;
+    yarn) ld_yarn_stop "$BASE_DIR" ;;
+    hive) ld_hive_stop "$BASE_DIR" ;;
+    *) ld_die "Unknown target: stop $target" ;;
+    esac
+    ;;
+
+status)
+    target="${1:-}"
+    shift || true
+    case "$target" in
+    "")
+        echo "==> hdfs"
+        ld_hdfs_status "$BASE_DIR"
+        echo
+        echo "==> yarn"
+        ld_yarn_status "$BASE_DIR"
+        echo
+        echo "==> hive"
+        ld_hive_status "$BASE_DIR"
+        ;;
+    hdfs) ld_hdfs_status "$BASE_DIR" ;;
+    yarn) ld_yarn_status "$BASE_DIR" ;;
+    hive) ld_hive_status "$BASE_DIR" ;;
+    *) ld_die "Unknown target: status $target" ;;
+    esac
+    ;;
+
+logs)
+    # Follow all service logs (combined).
+    # shellcheck disable=SC1090
+    eval "$(ld_env_print "$REPO_ROOT" "$BASE_DIR")"
+
+    state_dir="$(ld_state_dir "$BASE_DIR")"
+    hdfs_dir="$state_dir/hdfs/logs"
+    yarn_dir="$state_dir/yarn/logs"
+    hive_dir="$state_dir/hive/logs"
+
+    files=()
+    for f in \
+        "$hdfs_dir/namenode.log" \
+        "$hdfs_dir/datanode.log" \
+        "$yarn_dir/resourcemanager.log" \
+        "$yarn_dir/nodemanager.log" \
+        "$hive_dir/metastore.log" \
+        "$hive_dir/hiveserver2.log"; do
+        if [ -f "$f" ]; then
+            files+=("$f")
+        fi
+    done
+
+    if [ "${#files[@]}" -eq 0 ]; then
+        ld_die "No logs found under $state_dir (have you started services yet?)"
+    fi
+
+    echo "==> Following logs (Ctrl-C to stop):"
+    printf '    %s\n' "${files[@]}"
+    echo
+
+    # macOS tail supports -F (follow name) and -v (headers).
+    exec tail -n 80 -F -v "${files[@]}"
+    ;;
+
+hdfs | yarn | hive)
+    svc="$cmd"
+    sub="${1:-}"
+    shift || true
+    # shellcheck disable=SC1090
+    eval "$(ld_env_print "$REPO_ROOT" "$BASE_DIR")"
+    force=0
+    if [ "${1:-}" = "--force" ]; then
+        force=1
+        shift || true
+    fi
+
+    case "$svc:$sub" in
+    hdfs:start) ld_hdfs_start "$BASE_DIR" ;;
+    hdfs:stop) ld_hdfs_stop "$BASE_DIR" ;;
+    hdfs:status) ld_hdfs_status "$BASE_DIR" ;;
+    hdfs:logs) ld_hdfs_logs "$BASE_DIR" ;;
+
+    yarn:start) ld_yarn_start "$BASE_DIR" ;;
+    yarn:stop) ld_yarn_stop "$BASE_DIR" ;;
+    yarn:status) ld_yarn_status "$BASE_DIR" ;;
+    yarn:logs) ld_yarn_logs "$BASE_DIR" ;;
+
+    hive:start) ld_hive_start "$BASE_DIR" ;;
+    hive:stop)
+        if [ "$force" -eq 1 ]; then
+            ld_hive_stop_force "$BASE_DIR"
+        else
+            ld_hive_stop "$BASE_DIR"
+        fi
+        ;;
+    hive:status) ld_hive_status "$BASE_DIR" ;;
+    hive:logs) ld_hive_logs "$BASE_DIR" ;;
+
+    *) ld_die "Unknown subcommand: $svc $sub (expected: start|stop|status|logs)" ;;
+    esac
+    ;;
+
+*)
+    ld_die "Unknown command: $cmd"
+    ;;
+esac

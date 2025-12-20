@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Single-node dev cluster -->
+  <property>
+    <name>dfs.replication</name>
+    <value>1</value>
+  </property>
+
+  <!-- NameNode storage -->
+  <property>
+    <name>dfs.namenode.name.dir</name>
+    <value>file:/Users/${user.name}/data/local/hadoop/hdfs/namenode</value>
+  </property>
+
+  <!-- DataNode storage -->
+  <property>
+    <name>dfs.datanode.data.dir</name>
+    <value>file:/Users/${user.name}/data/local/hadoop/hdfs/datanode</value>
+  </property>
+</configuration>
