@@ -5,11 +5,45 @@
     <name>yarn.nodemanager.aux-services</name>
     <value>mapreduce_shuffle</value>
   </property>
+  <property>
+    <name>yarn.nodemanager.aux-services.mapreduce_shuffle.class</name>
+    <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+  </property>
 
-  <!-- Bind ResourceManager to localhost for single-node dev -->
+  <!-- Bind everything to localhost for single-node dev -->
   <property>
     <name>yarn.resourcemanager.hostname</name>
     <value>localhost</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.hostname</name>
+    <value>localhost</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.bind-host</name>
+    <value>127.0.0.1</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.address</name>
+    <value>127.0.0.1:0</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.localizer.address</name>
+    <value>127.0.0.1:8040</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.webapp.address</name>
+    <value>127.0.0.1:8042</value>
+  </property>
+
+  <!-- Disable container security/shuffle encryption -->
+  <property>
+    <name>yarn.nodemanager.container-executor.class</name>
+    <value>org.apache.hadoop.yarn.server.nodemanager.DefaultContainerExecutor</value>
+  </property>
+  <property>
+    <name>mapreduce.shuffle.ssl.enabled</name>
+    <value>false</value>
   </property>
 
   <!-- Resource limits (tuned for local dev) -->
@@ -22,9 +56,13 @@
     <value>4</value>
   </property>
 
-  <!-- Disable virtual memory checks (common local-dev fix) -->
+  <!-- Disable memory checks (macOS quirks) -->
   <property>
     <name>yarn.nodemanager.vmem-check-enabled</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.pmem-check-enabled</name>
     <value>false</value>
   </property>
 </configuration>

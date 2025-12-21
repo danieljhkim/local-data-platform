@@ -47,10 +47,12 @@ ld_usage() {
 local-data: manage a local Hadoop (HDFS + YARN) + Hive stack.
 
 Profiles
-  local-data profile init [--force]     Copy repo profiles into \$BASE_DIR for local edits
-  local-data profile list               List available profiles
-  local-data profile set <name>         Set active profile and apply runtime config overlay
-  local-data profile check              Verify required config files exist in the runtime overlay
+  local-data profile init [--force]          Copy repo profiles into \$BASE_DIR for local edits
+  local-data profile list                    List available profiles
+  local-data profile set [--from-repo] <name>
+                                             Set active profile and apply runtime config overlay
+                                             --from-repo: use repo profiles directly (bypass local)
+  local-data profile check                   Verify required config files exist in the runtime overlay
 
 Environment
   local-data env doctor [<command...>]       Check required deps (warn on optional)
@@ -97,7 +99,12 @@ profile)
         ld_profile_list "$REPO_ROOT" "$BASE_DIR"
         ;;
     set)
-        ld_profile_set "$REPO_ROOT" "$BASE_DIR" "${1:-}"
+        from_repo=0
+        if [ "${1:-}" = "--from-repo" ]; then
+            from_repo=1
+            shift || true
+        fi
+        ld_profile_set "$REPO_ROOT" "$BASE_DIR" "${1:-}" "$from_repo"
         ;;
     check)
         ld_conf_check "$BASE_DIR"

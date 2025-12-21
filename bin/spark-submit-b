@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Convenience wrapper for running spark-submit against the local-data managed
+# Hadoop/Hive environment (config overlay, env vars, etc).
+#
+# Usage:
+#   spark-submit-b --master yarn --deploy-mode client your_job.py
+#   spark-submit-b --class com.example.Main your.jar [args...]
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+local_data="$script_dir/local-data"
+
+exec "$local_data" env exec -- spark-submit "$@"

@@ -28,6 +28,7 @@ ld_env_print() {
     active_profile="$(ld_active_profile "$base_dir")"
 
     # Prefer user overrides; otherwise compute from Homebrew.
+    # Hadoop is optional (e.g. 'local' profile doesn't use it).
     local hadoop_home hive_home spark_home java_home
     hadoop_home="${HADOOP_HOME:-$(ld_brew_prefix hadoop)}"
 
@@ -54,7 +55,6 @@ ld_env_print() {
         java_home="$(/usr/libexec/java_home -v 17 2> /dev/null || /usr/libexec/java_home 2> /dev/null || true)"
     fi
 
-    [ -n "$hadoop_home" ] || ld_die "Could not determine HADOOP_HOME (install Homebrew Hadoop or set HADOOP_HOME)"
     [ -n "$hive_home" ] || ld_die "Could not determine HIVE_HOME (install Homebrew Hive or set HIVE_HOME)"
 
     local hadoop_conf hive_conf spark_conf
@@ -66,8 +66,21 @@ ld_env_print() {
     ld_emit_export REPO_ROOT "$repo_root"
     ld_emit_export ACTIVE_PROFILE "$active_profile"
 
-    ld_emit_export HADOOP_HOME "$hadoop_home"
+    # Hadoop env vars are optional (only set if hadoop_home is available)
+    if [ -n "$hadoop_home" ]; then
+        ld_emit_export HADOOP_HOME "$hadoop_home"
+        ld_emit_export HADOOP_COMMON_HOME "${HADOOP_COMMON_HOME:-$hadoop_home}"
+        ld_emit_export HADOOP_HDFS_HOME "${HADOOP_HDFS_HOME:-$hadoop_home}"
+        ld_emit_export HADOOP_MAPRED_HOME "${HADOOP_MAPRED_HOME:-$hadoop_home}"
+        ld_emit_export HADOOP_YARN_HOME "${HADOOP_YARN_HOME:-$hadoop_home}"
+        if [ -d "$hadoop_conf" ]; then
+            ld_emit_export HADOOP_CONF_DIR "$hadoop_conf"
+        fi
+    fi
+
     ld_emit_export HIVE_HOME "$hive_home"
+    ld_emit_export HIVE_CONF_DIR "$hive_conf"
+
     if [ -n "$spark_home" ]; then
         ld_emit_export SPARK_HOME "$spark_home"
     fi
@@ -76,30 +89,40 @@ ld_env_print() {
         ld_emit_export JAVA_HOME "$java_home"
     fi
 
-    ld_emit_export HADOOP_CONF_DIR "$hadoop_conf"
-    ld_emit_export HIVE_CONF_DIR "$hive_conf"
     if [ -d "$spark_conf" ]; then
         ld_emit_export SPARK_CONF_DIR "$spark_conf"
     fi
 
-    # Hadoop tooling expects these sometimes.
-    ld_emit_export HADOOP_COMMON_HOME "${HADOOP_COMMON_HOME:-$hadoop_home}"
-    ld_emit_export HADOOP_HDFS_HOME "${HADOOP_HDFS_HOME:-$hadoop_home}"
-    ld_emit_export HADOOP_MAPRED_HOME "${HADOOP_MAPRED_HOME:-$hadoop_home}"
-    ld_emit_export HADOOP_YARN_HOME "${HADOOP_YARN_HOME:-$hadoop_home}"
-
-    local path_parts=""
-    path_parts+="$repo_root/bin:"
+    # Build PATH with our directories first, then deduplicate
+    local -a new_path_parts=()
+    new_path_parts+=("$repo_root/bin")
     if [ -n "$java_home" ]; then
-        path_parts+="$java_home/bin:"
+        new_path_parts+=("$java_home/bin")
     fi
-    path_parts+="$hadoop_home/bin:$hadoop_home/sbin:$hive_home/bin:"
+    if [ -n "$hadoop_home" ]; then
+        new_path_parts+=("$hadoop_home/bin")
+        new_path_parts+=("$hadoop_home/sbin")
+    fi
+    new_path_parts+=("$hive_home/bin")
     if [ -n "$spark_home" ]; then
-        path_parts+="$spark_home/bin:"
+        new_path_parts+=("$spark_home/bin")
     fi
-    path_parts+="$PATH"
 
-    ld_emit_export PATH "$path_parts"
+    # Deduplicate: keep first occurrence of each path component
+    local seen="" final_path=""
+    local IFS=':'
+    for p in "${new_path_parts[@]}" $PATH; do
+        [ -n "$p" ] || continue
+        case ":$seen:" in
+        *":$p:"*) ;; # already seen, skip
+        *)
+            seen="$seen:$p"
+            final_path="${final_path:+$final_path:}$p"
+            ;;
+        esac
+    done
+
+    ld_emit_export PATH "$final_path"
 }
 
 ld_env_exec() {

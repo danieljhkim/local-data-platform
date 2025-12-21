@@ -4,8 +4,12 @@ This guide sets up a **local, pseudo-distributed** environment on macOS for
 learning and development:
 
 - **Hadoop (HDFS + YARN)** running on your machine (single host)
-- **Hive** using a local metastore (Postgres) and storing data in HDFS or local file system
+- **Hive** using a local metastore (Postgres) and storing data in HDFS (hdfs profile) or local file system (local profile)
 - **Spark** submitting jobs to YARN and reading/writing HDFS + Hive tables
+
+### Profile Types:
+1. **local:** hive + spark on local file system warehouse
+2. **hdfs:** hive + spark + name-node + data-node + yarn on hdfs warehouse
 
 ---
 
@@ -14,7 +18,7 @@ learning and development:
 - Java 17 (required)
 - Homebrew
 - Hadoop + Hive (required)
-- Spark (optional)
+- Spark
 - Postgres (only required if your Hive profile uses Postgres metastore)
 
 Suggested Homebrew installs:
@@ -168,29 +172,59 @@ Print exports (useful for debugging):
 local-data env print
 ```
 
-Run a command with the overlay + PATH set:
-
-```bash
-local-data env exec -- hdfs dfs -ls /
-local-data env exec -- hive --service metastore --help
-```
-
 ---
 
-## Beeline wrapper
+## CLI wrapper commands
 
-`bin/hive-b` is a convenience wrapper that runs Beeline through
-`local-data env exec`.
+These wrappers live under `bin/` and all run via `local-data env exec`, so they
+automatically use the active profile’s runtime overlay in `$BASE_DIR/conf/current`.
+
+### Beeline wrapper
 
 ```bash
 hive-b
 hive-b -e "SELECT 1"
 ```
 
-Credentials:
+### HDFS wrapper
 
-- Username: `HIVE_USER` (defaults to `whoami`)
-- Password: `HIVE_PASSWORD` (defaults to `password`)
+```bash
+# HDFS subcommands
+hdfs-b version
+hdfs-b dfs -ls /
+hdfs-b dfs -mkdir -p /spark-history
+hdfs-b dfs -put ./local_file.parquet /data/
+```
+
+### YARN wrapper
+
+```bash
+# Only relevant if you start YARN (local-data start yarn)
+yarn-b node -list
+yarn-b application -list
+yarn-b logs -applicationId <application_...>
+```
+
+### PySpark wrapper
+
+```bash
+# Interactive PySpark (uses spark-defaults.conf from the active profile)
+pyspark-b
+
+# Override config at launch time
+pyspark-b --conf spark.sql.shuffle.partitions=4
+```
+
+### spark-submit wrapper
+
+```bash
+# Run a PySpark job with the profile’s env + conf
+spark-submit-b ./jobs/etl_job.py --input hdfs:///data/raw --output hdfs:///data/curated
+
+# Include additional Python deps
+spark-submit-b --py-files ./deps.zip ./jobs/etl_job.py
+```
+
 
 ---
 
@@ -202,7 +236,7 @@ Step-by-step Postgres setup: see [docs/METASTORE_SETUP.md](docs/METASTORE_SETUP.
 The default `local` profile’s `hive-site.xml` points at a Postgres metastore:
 
 ```text
-jdbc:postgresql://localhost:5432/metastore
+jdbc:postgresql://localhost:10000/metastore
 ```
 
 If you keep that configuration, make sure Postgres is running and the
@@ -210,4 +244,3 @@ DB/user/password match your profile.
 
 If you use Spark with Postgres-backed Hive metastore, Spark may also need
 the Postgres JDBC jar available on its classpath.
-

@@ -85,11 +85,16 @@ ld_profile_list() {
 }
 
 ld_profile_set() {
-    local repo_root="$1" base_dir="$2" profile="$3"
+    local repo_root="$1" base_dir="$2" profile="$3" from_repo="${4:-0}"
     [ -n "$profile" ] || ld_die "Profile name required"
 
     local pdir
-    pdir="$(ld_profiles_dir "$repo_root" "$base_dir")"
+    if [ "$from_repo" -eq 1 ]; then
+        # Use repo profiles directly, bypassing user-initialized profiles
+        pdir="$repo_root/conf/profiles"
+    else
+        pdir="$(ld_profiles_dir "$repo_root" "$base_dir")"
+    fi
 
     [ -d "$pdir/$profile" ] || ld_die "Unknown profile '$profile' (expected: $pdir/$profile)"
 
@@ -98,17 +103,21 @@ ld_profile_set() {
 
     ld_log "Active profile set: $profile"
     ld_log "Using profiles from: $pdir"
-    ld_conf_apply "$repo_root" "$base_dir" "$profile"
+    ld_conf_apply "$repo_root" "$base_dir" "$profile" "$from_repo"
 }
 
 ld_conf_apply() {
-    local repo_root="$1" base_dir="$2" profile="${3:-}"
+    local repo_root="$1" base_dir="$2" profile="${3:-}" from_repo="${4:-0}"
     if [ -z "$profile" ]; then
         profile="$(ld_active_profile "$base_dir")"
     fi
 
     local pdir
-    pdir="$(ld_profiles_dir "$repo_root" "$base_dir")"
+    if [ "$from_repo" -eq 1 ]; then
+        pdir="$repo_root/conf/profiles"
+    else
+        pdir="$(ld_profiles_dir "$repo_root" "$base_dir")"
+    fi
 
     local src_root="$pdir/$profile"
     [ -d "$src_root" ] || ld_die "Profile not found: $src_root"
@@ -121,19 +130,22 @@ ld_conf_apply() {
     ld_log "  to:   $dst_root"
 
     # Materialize as plain files (no symlinks into Homebrew dirs).
-    ld_mkdirp "$dst_root/hadoop" "$dst_root/hive" "$dst_root/spark"
+    ld_mkdirp "$dst_root/hive" "$dst_root/spark"
 
-    # Hadoop XML
-    for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
-        ld_copy_or_render_profile_file "$src_root/hadoop" "$dst_root/hadoop/$f" "$f"
-    done
-
-    # Hadoop scheduler configs (optional, but required for some schedulers)
-    for f in capacity-scheduler.xml fair-scheduler.xml; do
-        if [ -f "$src_root/hadoop/$f.tmpl" ] || [ -f "$src_root/hadoop/$f" ]; then
+    # Hadoop XML (optional – some profiles like 'local' don't use Hadoop)
+    if [ -d "$src_root/hadoop" ]; then
+        ld_mkdirp "$dst_root/hadoop"
+        for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
             ld_copy_or_render_profile_file "$src_root/hadoop" "$dst_root/hadoop/$f" "$f"
-        fi
-    done
+        done
+
+        # Hadoop scheduler configs (optional, but required for some schedulers)
+        for f in capacity-scheduler.xml fair-scheduler.xml; do
+            if [ -f "$src_root/hadoop/$f.tmpl" ] || [ -f "$src_root/hadoop/$f" ]; then
+                ld_copy_or_render_profile_file "$src_root/hadoop" "$dst_root/hadoop/$f" "$f"
+            fi
+        done
+    fi
 
     # Hive XML
     ld_copy_or_render_profile_file "$src_root/hive" "$dst_root/hive/hive-site.xml" "hive-site.xml"
@@ -141,6 +153,11 @@ ld_conf_apply() {
     # Spark defaults (optional but strongly expected)
     if [ -f "$src_root/spark/spark-defaults.conf.tmpl" ] || [ -f "$src_root/spark/spark-defaults.conf" ]; then
         ld_copy_or_render_profile_file "$src_root/spark" "$dst_root/spark/spark-defaults.conf" "spark-defaults.conf"
+    fi
+
+    # Copy hive-site.xml into Spark conf so PySpark/spark-submit find the metastore
+    if [ -f "$dst_root/hive/hive-site.xml" ]; then
+        cp "$dst_root/hive/hive-site.xml" "$dst_root/spark/hive-site.xml"
     fi
 
     # Marker
@@ -154,9 +171,12 @@ ld_conf_check() {
 
     [ -d "$cur" ] || ld_die "Runtime conf overlay not found. Run: local-data profile set <name>"
 
-    for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
-        [ -f "$cur/hadoop/$f" ] || ld_die "Missing runtime Hadoop config: $cur/hadoop/$f"
-    done
+    # Hadoop configs are optional (e.g. 'local' profile doesn't use Hadoop)
+    if [ -d "$cur/hadoop" ]; then
+        for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
+            [ -f "$cur/hadoop/$f" ] || ld_die "Missing runtime Hadoop config: $cur/hadoop/$f"
+        done
+    fi
 
     [ -f "$cur/hive/hive-site.xml" ] || ld_die "Missing runtime Hive config: $cur/hive/hive-site.xml"
 

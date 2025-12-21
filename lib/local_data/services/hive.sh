@@ -12,51 +12,6 @@ ld_hive_dirs() {
     echo "$sd"
 }
 
-ld_hive_ensure_local_warehouse_dir() {
-    # If hive.metastore.warehouse.dir is configured with file:..., ensure the local
-    # directory exists before starting the metastore/HS2.
-    local hive_site="${HIVE_CONF_DIR:-}/hive-site.xml"
-    [ -f "$hive_site" ] || return 0
-
-    # Extract the <value> for hive.metastore.warehouse.dir (simple, robust enough for our profiles).
-    local warehouse
-    warehouse="$(
-        awk '
-          $0 ~ /<name>[[:space:]]*hive\\.metastore\\.warehouse\\.dir[[:space:]]*<\\/name>/ {inprop=1; next}
-          inprop && $0 ~ /<value>/ {
-            line=$0
-            sub(/.*<value>[[:space:]]*/, "", line)
-            sub(/[[:space:]]*<\\/value>.*/, "", line)
-            print line
-            exit
-          }
-          inprop && $0 ~ /<\\/property>/ {inprop=0}
-        ' "$hive_site" 2> /dev/null || true
-    )"
-
-    [ -n "$warehouse" ] || return 0
-    case "$warehouse" in
-    file:*)
-        # Normalize file: URIs/paths:
-        # - file:/abs/path
-        # - file:///abs/path
-        # - file:relative/path  (treat as relative to CWD)
-        local path="${warehouse#file:}"
-        # Collapse leading '///' -> '/'
-        while [ "${path#///}" != "$path" ]; do
-            path="/${path#///}"
-        done
-        # Trim single leading '//' -> '/'
-        while [ "${path#//}" != "$path" ]; do
-            path="/${path#//}"
-        done
-        # If empty, nothing to do
-        [ -n "$path" ] || return 0
-        ld_mkdirp "$path"
-        ;;
-    esac
-}
-
 ld_hive_start() {
     local base_dir="$1"
 
@@ -64,7 +19,8 @@ ld_hive_start() {
     sd="$(ld_hive_dirs "$base_dir")"
     log_dir="$sd/logs"
     pid_dir="$sd/pids"
-    ld_mkdirp "$log_dir" "$pid_dir"
+    warehouse_dir="$sd/warehouse"
+    ld_mkdirp "$log_dir" "$pid_dir" "$warehouse_dir"
 
     # If the active Hive config uses Postgres for the metastore, ensure the JDBC
     # driver is available before starting services.
@@ -76,8 +32,6 @@ ld_hive_start() {
             ld_die "Postgres metastore detected but ensure_postgres_jdbc_jar is not available"
         fi
     fi
-
-    ld_hive_ensure_local_warehouse_dir
 
     if [ -f "$pid_dir/metastore.pid" ] && kill -0 "$(cat "$pid_dir/metastore.pid")" 2> /dev/null; then
         ld_log "Hive metastore already running (pid $(cat "$pid_dir/metastore.pid"))."

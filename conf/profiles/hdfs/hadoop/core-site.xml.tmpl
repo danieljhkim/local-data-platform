@@ -11,6 +11,22 @@
     <name>hadoop.tmp.dir</name>
     <value>{{BASE_DIR}}/state/hadoop/tmp</value>
   </property>
+
+  <!-- Disable Hadoop security (local dev only) -->
+  <property>
+    <name>hadoop.security.authentication</name>
+    <value>simple</value>
+  </property>
+  <property>
+    <name>hadoop.security.authorization</name>
+    <value>false</value>
+  </property>
+
+  <!-- Force IPC to use simple auth (no SASL) -->
+  <property>
+    <name>ipc.client.fallback-to-simple-auth-allowed</name>
+    <value>true</value>
+  </property>
 </configuration>
 
 

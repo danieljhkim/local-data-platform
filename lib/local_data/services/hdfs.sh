@@ -274,6 +274,8 @@ ld_hdfs_start() {
     hdfs dfs -mkdir -p "/user/$(whoami)" || true
     hdfs dfs -mkdir -p /user/hive/warehouse || true
     hdfs dfs -chmod g+w /user/hive/warehouse || true
+    hdfs dfs -mkdir -p /spark-history || true
+    hdfs dfs -chmod 1777 /spark-history || true
 }
 
 ld_hdfs_stop() {

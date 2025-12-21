@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Convenience wrapper for running Hadoop CLI commands against the local-data
+# managed Hadoop environment (config overlay, env vars, etc).
+#
+# Usage:
+#   hadoop-b version
+#   hadoop-b fs -ls /
+#   hadoop-b jar <jar> [args...]
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+local_data="$script_dir/local-data"
+
+exec "$local_data" env exec -- hadoop "$@"
