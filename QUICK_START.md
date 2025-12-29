@@ -236,7 +236,7 @@ Step-by-step Postgres setup: see [docs/METASTORE_SETUP.md](docs/METASTORE_SETUP.
 The default `local` profile’s `hive-site.xml` points at a Postgres metastore:
 
 ```text
-jdbc:postgresql://localhost:10000/metastore
+jdbc:postgresql://localhost:5432/metastore
 ```
 
 If you keep that configuration, make sure Postgres is running and the

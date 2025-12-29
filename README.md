@@ -1,8 +1,13 @@
 
-# local-data-platform (macOS)
+# local-data-platform (LDP)
 
-Local, single-machine Hadoop (HDFS + YARN) + Hive + spark environment manager 
-with a small Bash CLI. 
+- *only macOS is supported at this time*
+
+Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on clound, and the disconnect between the cloud and my local machine. 
+
+If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity.
+
+Local-data-platform is a local, single-machine Hadoop (HDFS + YARN) + Hive + spark environment manager with a small Bash CLI. 
 
 What you get:
 
@@ -14,7 +19,7 @@ What you get:
   1. **local**: local spark and hive on local filesytem warehouse (in `$BASE_DIR/state/hive/warehouse`)
   2. **hdfs**: YARN + NameNode + DataNode + spark + hive on hdfs warehouse
 
-Note: *default value of `$BASE_DIR`=/Users/yourname/local-data-platform*
+> Note: *default value of `$BASE_DIR`=/Users/{whoami}/local-data-platform*
 
 **Prequisite Setup:**
 
@@ -22,12 +27,12 @@ Note: *default value of `$BASE_DIR`=/Users/yourname/local-data-platform*
 - Java 17
 - Homebrew
 - Hadoop + Hive (required)
-- Spark (recommended)
+- Spark (recommended if you need spark to access tables via hive metastore)
 
 Suggested installs:
 
 ```bash
-brew install hadoop hive jdk@17 apache-spark postgresql
+brew install hadoop hive jdk@17 apache-spark postgresql@16
 ```
 
 ---
@@ -42,8 +47,10 @@ make path
 
 # instantiates local and hdfs profiles in $BASE_DIR/conf/profiles/
 local-data profile init
-# sets $BASE_DIR/conf/current to hdfs profile; or local if you just want hive + spark
+# sets current profile to hdfs (hdfs + hive + spark);
 local-data profile set hdfs
+# set current profile to local, if you just want hive + spark
+local-data profile set local
 
 # starts YARN, nameNode, dataNode, hiveServer2, metastore
 local-data start
@@ -85,10 +92,14 @@ yarn-b top
 
 ## How it works
 
-- Profiles live in `conf/profiles/<name>/{hadoop,hive,spark}`.
+- Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`.
 - `local-data profile set <name>` materializes a runtime overlay at
   `$BASE_DIR/conf/current/{hadoop,hive,spark}`.
 - `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`,
   `HIVE_CONF_DIR`, and `PATH` set to use the overlay.
 - `hive-b` invokes beeline cli
+- `hdfs-b` invokes hdfs cli
+- `yarn-b` invokes yarn cli
+- `pyspark-b` invokes pyspark cli
+- `spark-submit-b` invokes spark-submit cli
 
