@@ -69,8 +69,8 @@ func TestProfileManager_Init(t *testing.T) {
 			paths := NewPaths(repoRoot, baseDir)
 			pm := NewProfileManager(paths)
 
-			// Run init
-			err := pm.Init(tt.force)
+			// Run init (use SourceRepo since tests have repo profiles setup)
+			err := pm.Init(InitOptions{Force: tt.force, SourceRepo: true})
 
 			if tt.expectError {
 				if err == nil {
