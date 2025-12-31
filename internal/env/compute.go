@@ -18,6 +18,7 @@ type Environment struct {
 	ActiveProfile string
 
 	HadoopHome       string
+	HadoopPrefix     string // For PATH (may differ from Home for Homebrew)
 	HadoopCommonHome string
 	HadoopHDFSHome   string
 	HadoopMapredHome string
@@ -49,7 +50,7 @@ func Compute(paths *config.Paths) (*Environment, error) {
 	}
 
 	// Apply overlay silently (no output)
-	if err := pm.Apply(activeProfile, false); err != nil {
+	if err := pm.Apply(activeProfile); err != nil {
 		return nil, fmt.Errorf("failed to apply profile overlay: %w", err)
 	}
 
@@ -71,9 +72,10 @@ func Compute(paths *config.Paths) (*Environment, error) {
 	hadoopConfDir := paths.CurrentHadoopConf()
 	if util.DirExists(hadoopConfDir) && detection.HadoopHome != "" {
 		env.HadoopHome = detection.HadoopHome
+		env.HadoopPrefix = detection.HadoopPrefix
 		env.HadoopConfDir = hadoopConfDir
 
-		// Set Hadoop-related homes
+		// Set Hadoop-related homes (all point to libexec for Homebrew)
 		if os.Getenv("HADOOP_COMMON_HOME") != "" {
 			env.HadoopCommonHome = os.Getenv("HADOOP_COMMON_HOME")
 		} else {
@@ -120,19 +122,25 @@ func Compute(paths *config.Paths) (*Environment, error) {
 func buildPath(env *Environment, paths *config.Paths) string {
 	var newParts []string
 
-	// Add repo bin directory
-	newParts = append(newParts, filepath.Join(env.RepoRoot, "bin"))
+	// Add repo bin directory (only if RepoRoot is set)
+	if env.RepoRoot != "" {
+		newParts = append(newParts, filepath.Join(env.RepoRoot, "bin"))
+	}
 
 	// Add Java bin
 	if env.JavaHome != "" {
 		newParts = append(newParts, filepath.Join(env.JavaHome, "bin"))
 	}
 
-	// Add Hadoop bin and sbin
-	if env.HadoopHome != "" {
+	// Add Hadoop bin and sbin (use Prefix for PATH, not Home)
+	hadoopBinDir := env.HadoopPrefix
+	if hadoopBinDir == "" {
+		hadoopBinDir = env.HadoopHome
+	}
+	if hadoopBinDir != "" {
 		newParts = append(newParts,
-			filepath.Join(env.HadoopHome, "bin"),
-			filepath.Join(env.HadoopHome, "sbin"),
+			filepath.Join(hadoopBinDir, "bin"),
+			filepath.Join(hadoopBinDir, "sbin"),
 		)
 	}
 

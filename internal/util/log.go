@@ -5,11 +5,11 @@ import (
 	"os"
 )
 
-// Log prints an informational message to stdout
-// Mirrors Bash ld_log function: echo "==> $*"
+// Log prints an informational message to stderr
+// Mirrors Bash ld_log function: echo "==> $*" >&2
 func Log(msg string, args ...interface{}) {
 	formatted := fmt.Sprintf(msg, args...)
-	fmt.Printf("==> %s\n", formatted)
+	fmt.Fprintf(os.Stderr, "==> %s\n", formatted)
 }
 
 // Die prints an error message to stderr and exits with status 1

@@ -11,7 +11,6 @@ import (
 )
 
 // ProfileManager handles profile initialization, listing, setting, and overlay application
-// Mirrors the functionality from lib/local_data/overlay.sh
 type ProfileManager struct {
 	paths *Paths
 }
@@ -23,28 +22,18 @@ func NewProfileManager(paths *Paths) *ProfileManager {
 	}
 }
 
-// InitOptions contains options for profile initialization
-type InitOptions struct {
-	Force      bool   // Overwrite existing profiles
-	SourceRepo bool   // Use repository profiles (legacy behavior)
-	ProfileDir string // Custom profile directory when using repo source
-	User       string // Override username for template substitution
-}
-
 // IsInitialized checks if profiles have been initialized
 func (pm *ProfileManager) IsInitialized() bool {
 	return util.DirExists(pm.paths.UserProfilesDir())
 }
 
-// Init initializes editable profiles
-// Default: generate profiles using Go struct generator
-// With SourceRepo=true: copy from repository profiles (legacy behavior)
-func (pm *ProfileManager) Init(opts InitOptions) error {
+// Init initializes profiles using the Go struct generator
+func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 	dst := pm.paths.UserProfilesDir()
 
 	// Check if destination already exists
 	if util.DirExists(dst) {
-		if opts.Force {
+		if force {
 			util.Log("Re-initializing profiles (overwriting): %s", dst)
 			if err := os.RemoveAll(dst); err != nil {
 				return fmt.Errorf("failed to remove existing profiles: %w", err)
@@ -61,21 +50,10 @@ func (pm *ProfileManager) Init(opts InitOptions) error {
 		return err
 	}
 
-	if opts.SourceRepo {
-		// Legacy behavior: copy from repository profiles
-		return pm.initFromRepo(dst, opts.ProfileDir)
-	}
-
-	// Default: generate profiles using Go struct generator
-	return pm.initGenerated(dst, opts.User)
-}
-
-// initGenerated generates profiles using the Go struct generator
-func (pm *ProfileManager) initGenerated(dst, userName string) error {
 	util.Log("Generating profiles under: %s", dst)
 
 	gen := generator.NewConfigGenerator()
-	if err := gen.InitProfiles(pm.paths.BaseDir, dst, userName); err != nil {
+	if err := gen.InitProfiles(pm.paths.BaseDir, dst, opts); err != nil {
 		return fmt.Errorf("failed to generate profiles: %w", err)
 	}
 
@@ -85,38 +63,12 @@ func (pm *ProfileManager) initGenerated(dst, userName string) error {
 	return nil
 }
 
-// initFromRepo copies profiles from repository (legacy behavior)
-func (pm *ProfileManager) initFromRepo(dst, profileDir string) error {
-	src := profileDir
-	if src == "" {
-		src = pm.paths.RepoProfilesDir()
-	}
-
-	// Check if source exists
-	if !util.DirExists(src) {
-		return fmt.Errorf("missing repo profiles directory: %s", src)
-	}
-
-	util.Log("Initializing profiles from repository: %s", src)
-	util.Log("  Copying to: %s", dst)
-
-	if err := util.CopyDir(src, dst); err != nil {
-		return err
-	}
-
-	util.Log("Profiles initialized successfully")
-	util.Log("  Runtime config overlay: %s", pm.paths.CurrentConfDir())
-
-	return nil
-}
-
 // List returns a sorted list of available profile names
-// Mirrors ld_profile_list
 func (pm *ProfileManager) List() ([]string, error) {
-	pdir := pm.paths.ProfilesDir()
+	pdir := pm.paths.UserProfilesDir()
 
 	if !util.DirExists(pdir) {
-		return nil, fmt.Errorf("missing profiles directory: %s", pdir)
+		return nil, fmt.Errorf("profiles not initialized. Run: local-data profile init")
 	}
 
 	// Read directory entries
@@ -137,20 +89,12 @@ func (pm *ProfileManager) List() ([]string, error) {
 }
 
 // Set sets the active profile and applies the runtime config overlay
-// Mirrors ld_profile_set
-func (pm *ProfileManager) Set(profile string, fromRepo bool) error {
+func (pm *ProfileManager) Set(profile string) error {
 	if profile == "" {
 		return fmt.Errorf("profile name required")
 	}
 
-	// Determine profile source directory
-	var pdir string
-	if fromRepo {
-		pdir = pm.paths.RepoProfilesDir()
-	} else {
-		pdir = pm.paths.ProfilesDir()
-	}
-
+	pdir := pm.paths.UserProfilesDir()
 	profilePath := filepath.Join(pdir, profile)
 	if !util.DirExists(profilePath) {
 		return fmt.Errorf("unknown profile '%s' (expected: %s)", profile, profilePath)
@@ -167,15 +111,13 @@ func (pm *ProfileManager) Set(profile string, fromRepo bool) error {
 	}
 
 	util.Log("Active profile set: %s", profile)
-	util.Log("Using profiles from: %s", pdir)
 
 	// Apply the overlay
-	return pm.Apply(profile, fromRepo)
+	return pm.Apply(profile)
 }
 
 // Apply applies the runtime config overlay for a profile
-// Mirrors ld_conf_apply
-func (pm *ProfileManager) Apply(profile string, fromRepo bool) error {
+func (pm *ProfileManager) Apply(profile string) error {
 	// If profile is empty, use active profile
 	if profile == "" {
 		var err error
@@ -187,146 +129,23 @@ func (pm *ProfileManager) Apply(profile string, fromRepo bool) error {
 
 	dstRoot := pm.paths.CurrentConfDir()
 
-	// Try to use programmatic generation for built-in profiles
 	gen := generator.NewConfigGenerator()
-	if gen.HasProfile(profile) && !fromRepo {
-		util.Log("Applying runtime config overlay for profile '%s' (generated)", profile)
-		util.Log("  to: %s", dstRoot)
-
-		// Generate config files programmatically
-		if err := gen.Generate(profile, pm.paths.BaseDir, dstRoot); err != nil {
-			return fmt.Errorf("failed to generate config: %w", err)
-		}
-
-		// Copy hive-site.xml into Spark conf so PySpark/spark-submit find the metastore
-		hiveConfig := filepath.Join(dstRoot, "hive", "hive-site.xml")
-		if util.FileExists(hiveConfig) {
-			sparkHiveConfig := filepath.Join(dstRoot, "spark", "hive-site.xml")
-			if err := util.CopyFile(hiveConfig, sparkHiveConfig); err != nil {
-				util.Warn("Failed to copy hive-site.xml to Spark conf: %v", err)
-			}
-		}
-
-		// Write marker file
-		markerPath := filepath.Join(dstRoot, ".profile")
-		if err := os.WriteFile(markerPath, []byte(profile), 0644); err != nil {
-			return fmt.Errorf("failed to write profile marker: %w", err)
-		}
-
-		return nil
-	}
-
-	// Fallback to file-based overlay for custom profiles or when fromRepo is true
-	return pm.applyFromFiles(profile, fromRepo, dstRoot)
-}
-
-// applyFromFiles applies the runtime config overlay from profile files
-// This is the legacy approach, used for custom profiles
-func (pm *ProfileManager) applyFromFiles(profile string, fromRepo bool, dstRoot string) error {
-	// Determine profile source directory
-	var pdir string
-	if fromRepo {
-		pdir = pm.paths.RepoProfilesDir()
-	} else {
-		pdir = pm.paths.ProfilesDir()
-	}
-
-	srcRoot := filepath.Join(pdir, profile)
-	if !util.DirExists(srcRoot) {
-		return fmt.Errorf("profile not found: %s", srcRoot)
+	if !gen.HasProfile(profile) {
+		return fmt.Errorf("unknown profile '%s'", profile)
 	}
 
 	util.Log("Applying runtime config overlay for profile '%s'", profile)
-	util.Log("  from: %s", srcRoot)
-	util.Log("  to:   %s", dstRoot)
+	util.Log("  to: %s", dstRoot)
 
-	// Get template variables
-	vars, err := NewTemplateVars(pm.paths.BaseDir)
-	if err != nil {
-		return err
-	}
-
-	// Materialize as plain files (no symlinks)
-	// Create base directories
-	if err := util.MkdirAll(
-		filepath.Join(dstRoot, "hive"),
-		filepath.Join(dstRoot, "spark"),
-	); err != nil {
-		return err
-	}
-
-	// Hadoop XML (optional - some profiles like 'local' don't use Hadoop)
-	hadoopSrc := filepath.Join(srcRoot, "hadoop")
-	hadoopDst := filepath.Join(dstRoot, "hadoop")
-	if util.DirExists(hadoopSrc) {
-		if err := util.MkdirAll(hadoopDst); err != nil {
-			return err
-		}
-
-		// Required Hadoop configs
-		requiredConfigs := []string{
-			"core-site.xml",
-			"hdfs-site.xml",
-			"mapred-site.xml",
-			"yarn-site.xml",
-		}
-
-		for _, f := range requiredConfigs {
-			dstPath := filepath.Join(hadoopDst, f)
-			if err := CopyOrRenderFile(hadoopSrc, dstPath, f, vars); err != nil {
-				return err
-			}
-		}
-
-		// Optional scheduler configs
-		optionalConfigs := []string{
-			"capacity-scheduler.xml",
-			"fair-scheduler.xml",
-		}
-
-		for _, f := range optionalConfigs {
-			tmplPath := filepath.Join(hadoopSrc, f+".tmpl")
-			plainPath := filepath.Join(hadoopSrc, f)
-			if util.FileExists(tmplPath) || util.FileExists(plainPath) {
-				dstPath := filepath.Join(hadoopDst, f)
-				if err := CopyOrRenderFile(hadoopSrc, dstPath, f, vars); err != nil {
-					// Don't fail on optional configs
-					util.Warn("Failed to copy optional config %s: %v", f, err)
-				}
-			}
-		}
-	} else {
-		// Profile doesn't use Hadoop - remove stale hadoop conf from previous profile
-		if util.DirExists(hadoopDst) {
-			if err := os.RemoveAll(hadoopDst); err != nil {
-				util.Warn("Failed to remove stale hadoop conf: %v", err)
-			}
-		}
-	}
-
-	// Hive XML (required)
-	hiveSrc := filepath.Join(srcRoot, "hive")
-	hiveDst := filepath.Join(dstRoot, "hive")
-	hiveConfig := filepath.Join(hiveDst, "hive-site.xml")
-	if err := CopyOrRenderFile(hiveSrc, hiveConfig, "hive-site.xml", vars); err != nil {
-		return fmt.Errorf("failed to copy required Hive config: %w", err)
-	}
-
-	// Spark defaults (optional but strongly expected)
-	sparkSrc := filepath.Join(srcRoot, "spark")
-	sparkDst := filepath.Join(dstRoot, "spark")
-	sparkTmpl := filepath.Join(sparkSrc, "spark-defaults.conf.tmpl")
-	sparkPlain := filepath.Join(sparkSrc, "spark-defaults.conf")
-	if util.FileExists(sparkTmpl) || util.FileExists(sparkPlain) {
-		sparkConfig := filepath.Join(sparkDst, "spark-defaults.conf")
-		if err := CopyOrRenderFile(sparkSrc, sparkConfig, "spark-defaults.conf", vars); err != nil {
-			util.Warn("Failed to copy Spark config: %v", err)
-		}
+	// Generate config files programmatically
+	if err := gen.Generate(profile, pm.paths.BaseDir, dstRoot); err != nil {
+		return fmt.Errorf("failed to generate config: %w", err)
 	}
 
 	// Copy hive-site.xml into Spark conf so PySpark/spark-submit find the metastore
+	hiveConfig := filepath.Join(dstRoot, "hive", "hive-site.xml")
 	if util.FileExists(hiveConfig) {
-		sparkHiveConfig := filepath.Join(sparkDst, "hive-site.xml")
+		sparkHiveConfig := filepath.Join(dstRoot, "spark", "hive-site.xml")
 		if err := util.CopyFile(hiveConfig, sparkHiveConfig); err != nil {
 			util.Warn("Failed to copy hive-site.xml to Spark conf: %v", err)
 		}
@@ -342,7 +161,6 @@ func (pm *ProfileManager) applyFromFiles(profile string, fromRepo bool, dstRoot 
 }
 
 // Check verifies that the runtime config overlay exists and is valid
-// Mirrors ld_conf_check
 func (pm *ProfileManager) Check() error {
 	cur := pm.paths.CurrentConfDir()
 

@@ -180,16 +180,43 @@ func FindSparkHome() string {
 	return ""
 }
 
-// FindHadoopHome finds Hadoop installation home
-func FindHadoopHome() string {
+// HadoopInstall contains Hadoop installation paths
+type HadoopInstall struct {
+	Prefix string // Brew prefix (for bin/sbin in PATH)
+	Home   string // HADOOP_HOME (libexec for Homebrew)
+}
+
+// FindHadoopInstall finds Hadoop installation paths
+func FindHadoopInstall() *HadoopInstall {
 	// Check environment variable first
 	if hadoopHome := os.Getenv("HADOOP_HOME"); hadoopHome != "" {
-		return hadoopHome
+		return &HadoopInstall{
+			Prefix: hadoopHome,
+			Home:   hadoopHome,
+		}
 	}
 
 	// Try Homebrew
 	hb := NewHomebrewDetector()
-	return hb.Prefix("hadoop")
+	prefix := hb.Prefix("hadoop")
+	if prefix != "" {
+		return &HadoopInstall{
+			Prefix: prefix,
+			// Homebrew Hadoop needs /libexec suffix for proper library resolution
+			Home: prefix + "/libexec",
+		}
+	}
+
+	return nil
+}
+
+// FindHadoopHome finds Hadoop installation home (legacy, returns Home)
+func FindHadoopHome() string {
+	install := FindHadoopInstall()
+	if install != nil {
+		return install.Home
+	}
+	return ""
 }
 
 // FindHiveHome finds Hive installation home
@@ -209,16 +236,22 @@ func FindHiveHome() string {
 		prefix = hb.Prefix("hive")
 	}
 
-	return prefix
+	if prefix != "" {
+		// Homebrew Hive needs /libexec suffix for proper library resolution
+		return prefix + "/libexec"
+	}
+
+	return ""
 }
 
 // DetectionResult holds the result of environment detection
 type DetectionResult struct {
-	JavaHome   string
-	JavaMajor  int
-	HadoopHome string
-	HiveHome   string
-	SparkHome  string
+	JavaHome      string
+	JavaMajor     int
+	HadoopHome    string
+	HadoopPrefix  string // Brew prefix for PATH (may differ from Home)
+	HiveHome      string
+	SparkHome     string
 }
 
 // DetectEnvironment performs comprehensive environment detection
@@ -226,11 +259,17 @@ func DetectEnvironment() (*DetectionResult, error) {
 	javaDetector := NewJavaDetector()
 
 	result := &DetectionResult{
-		JavaHome:   javaDetector.FindJavaHome(),
-		JavaMajor:  javaDetector.MajorVersion(),
-		HadoopHome: FindHadoopHome(),
-		HiveHome:   FindHiveHome(),
-		SparkHome:  FindSparkHome(),
+		JavaHome:  javaDetector.FindJavaHome(),
+		JavaMajor: javaDetector.MajorVersion(),
+		HiveHome:  FindHiveHome(),
+		SparkHome: FindSparkHome(),
+	}
+
+	// Set Hadoop paths
+	hadoopInstall := FindHadoopInstall()
+	if hadoopInstall != nil {
+		result.HadoopHome = hadoopInstall.Home
+		result.HadoopPrefix = hadoopInstall.Prefix
 	}
 
 	// Hive is required

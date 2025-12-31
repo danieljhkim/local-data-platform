@@ -84,7 +84,7 @@ func (h *HiveService) ensurePostgresJDBC() error {
 				strings.Contains(contentStr, "org.postgresql.Driver") {
 
 				util.Log("Postgres metastore detected, ensuring JDBC driver is available...")
-				jarPath, err := EnsurePostgresJDBCDriver(h.env.HiveHome, h.paths.BaseDir)
+				jarPath, err := EnsurePostgresJDBCDriver(h.env.HiveHome, h.env.SparkHome, h.paths.BaseDir)
 				if err != nil {
 					return fmt.Errorf("failed to ensure Postgres JDBC driver: %w", err)
 				}

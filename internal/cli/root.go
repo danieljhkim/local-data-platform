@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -76,12 +75,12 @@ func getPaths() *config.Paths {
 
 // getRepoRoot determines the repository root directory
 // Looks for conf/ directory next to the binary or one level up
+// Returns empty string if not found (repo root is optional with generator-based profiles)
 func getRepoRoot() string {
 	// Get the executable path
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to get executable path: %v\n", err)
-		os.Exit(1)
+		return ""
 	}
 
 	// Get the directory containing the executable
@@ -101,8 +100,7 @@ func getRepoRoot() string {
 	// Fallback: use current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to get current directory: %v\n", err)
-		os.Exit(1)
+		return ""
 	}
 
 	// Check if conf/ is in current directory
@@ -116,8 +114,7 @@ func getRepoRoot() string {
 		return parent
 	}
 
-	fmt.Fprintf(os.Stderr, "ERROR: Could not find 'conf/' directory next to binary or in parent directories\n")
-	os.Exit(1)
+	// Repo root not found - this is OK since profiles are now generated
 	return ""
 }
 

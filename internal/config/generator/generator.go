@@ -9,6 +9,13 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/config/schema"
 )
 
+// InitOptions holds optional parameters for profile initialization
+type InitOptions struct {
+	User       string // Override username
+	DBUrl      string // Override database connection URL
+	DBPassword string // Override database password
+}
+
 // ConfigGenerator generates configuration files for profiles
 type ConfigGenerator struct {
 	registry *profiles.Registry
@@ -33,25 +40,25 @@ func (g *ConfigGenerator) List() []string {
 
 // InitProfiles generates all built-in profiles to the profiles directory
 // This creates $destProfilesDir/{hdfs,local}/ with config files
-func (g *ConfigGenerator) InitProfiles(baseDir, destProfilesDir, userName string) error {
+func (g *ConfigGenerator) InitProfiles(baseDir, destProfilesDir string, opts *InitOptions) error {
 	for _, profileName := range g.registry.List() {
 		profileDir := filepath.Join(destProfilesDir, profileName)
-		if err := g.GenerateWithUser(profileName, baseDir, profileDir, userName); err != nil {
+		if err := g.GenerateWithOptions(profileName, baseDir, profileDir, opts); err != nil {
 			return fmt.Errorf("failed to generate profile '%s': %w", profileName, err)
 		}
 	}
 	return nil
 }
 
-// GenerateWithUser generates all config files for a profile with optional user override
-func (g *ConfigGenerator) GenerateWithUser(profileName, baseDir, destDir, userName string) error {
+// GenerateWithOptions generates all config files for a profile with optional overrides
+func (g *ConfigGenerator) GenerateWithOptions(profileName, baseDir, destDir string, opts *InitOptions) error {
 	// 1. Get base profile from registry
 	profile, err := g.registry.Get(profileName)
 	if err != nil {
 		return err
 	}
 
-	// 2. Load user overrides
+	// 2. Load user overrides from YAML
 	overrides, err := LoadOverrides(baseDir)
 	if err != nil {
 		return fmt.Errorf("failed to load overrides: %w", err)
@@ -63,13 +70,22 @@ func (g *ConfigGenerator) GenerateWithUser(profileName, baseDir, destDir, userNa
 		configSet = MergeOverrides(configSet, profileOverride)
 	}
 
-	// 4. Create template context with optional user override
+	// 4. Apply CLI options (these take precedence over YAML overrides)
+	if opts != nil {
+		configSet = g.applyInitOptions(configSet, opts)
+	}
+
+	// 5. Create template context with optional user override
+	userName := ""
+	if opts != nil {
+		userName = opts.User
+	}
 	ctx, err := schema.NewTemplateContextWithUser(baseDir, userName)
 	if err != nil {
 		return fmt.Errorf("failed to create template context: %w", err)
 	}
 
-	// 5. Generate files
+	// 6. Generate files
 	if configSet.Hadoop != nil {
 		if err := g.generateHadoop(configSet.Hadoop, ctx, destDir); err != nil {
 			return fmt.Errorf("failed to generate Hadoop config: %w", err)
@@ -97,6 +113,28 @@ func (g *ConfigGenerator) GenerateWithUser(profileName, baseDir, destDir, userNa
 	}
 
 	return nil
+}
+
+// applyInitOptions applies CLI options to the config set
+func (g *ConfigGenerator) applyInitOptions(configSet *schema.ConfigSet, opts *InitOptions) *schema.ConfigSet {
+	if opts == nil {
+		return configSet
+	}
+
+	// Clone to avoid modifying the original
+	result := configSet.Clone()
+
+	// Apply DB options to Hive config
+	if result.Hive != nil {
+		if opts.DBUrl != "" {
+			result.Hive.ConnectionURL = opts.DBUrl
+		}
+		if opts.DBPassword != "" {
+			result.Hive.ConnectionPassword = opts.DBPassword
+		}
+	}
+
+	return result
 }
 
 // Generate generates all config files for a profile

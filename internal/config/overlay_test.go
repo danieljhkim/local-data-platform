@@ -42,21 +42,6 @@ func TestProfileManager_Init(t *testing.T) {
 			repoRoot := filepath.Join(tmpDir, "repo")
 			baseDir := filepath.Join(tmpDir, "base")
 
-			// Create repo profiles directory with test profiles
-			repoProfiles := filepath.Join(repoRoot, "conf", "profiles")
-			localProfile := filepath.Join(repoProfiles, "local")
-			hdfsProfile := filepath.Join(repoProfiles, "hdfs")
-
-			util.MkdirAll(filepath.Join(localProfile, "hive"))
-			util.MkdirAll(filepath.Join(localProfile, "spark"))
-			util.MkdirAll(filepath.Join(hdfsProfile, "hadoop"))
-			util.MkdirAll(filepath.Join(hdfsProfile, "hive"))
-			util.MkdirAll(filepath.Join(hdfsProfile, "spark"))
-
-			// Create dummy config files
-			os.WriteFile(filepath.Join(localProfile, "hive", "hive-site.xml"), []byte("<configuration></configuration>"), 0644)
-			os.WriteFile(filepath.Join(hdfsProfile, "hive", "hive-site.xml"), []byte("<configuration></configuration>"), 0644)
-
 			// Pre-create user profiles if needed
 			userProfiles := filepath.Join(baseDir, "conf", "profiles")
 			if tt.preExist {
@@ -69,8 +54,8 @@ func TestProfileManager_Init(t *testing.T) {
 			paths := NewPaths(repoRoot, baseDir)
 			pm := NewProfileManager(paths)
 
-			// Run init (use SourceRepo since tests have repo profiles setup)
-			err := pm.Init(InitOptions{Force: tt.force, SourceRepo: true})
+			// Run init
+			err := pm.Init(tt.force, nil)
 
 			if tt.expectError {
 				if err == nil {
@@ -93,17 +78,17 @@ func TestProfileManager_Init(t *testing.T) {
 				return
 			}
 
-			// Otherwise, verify user profiles directory exists and profiles were copied
+			// Otherwise, verify user profiles directory exists and profiles were generated
 			if !util.DirExists(userProfiles) {
 				t.Error("User profiles directory not created")
 			}
 
-			// Verify profiles were copied
+			// Verify profiles were generated
 			if !util.DirExists(filepath.Join(userProfiles, "local")) {
-				t.Error("Local profile not copied")
+				t.Error("Local profile not generated")
 			}
 			if !util.DirExists(filepath.Join(userProfiles, "hdfs")) {
-				t.Error("HDFS profile not copied")
+				t.Error("HDFS profile not generated")
 			}
 
 			// For force overwrite, verify marker was removed
@@ -119,27 +104,21 @@ func TestProfileManager_Init(t *testing.T) {
 func TestProfileManager_List(t *testing.T) {
 	tests := []struct {
 		name             string
-		createProfiles   []string
+		initProfiles     bool
 		expectedProfiles []string
 		expectError      bool
 	}{
 		{
-			name:             "list existing profiles",
-			createProfiles:   []string{"local", "hdfs", "custom"},
-			expectedProfiles: []string{"custom", "hdfs", "local"}, // Sorted
+			name:             "list after init",
+			initProfiles:     true,
+			expectedProfiles: []string{"hdfs", "local"}, // Sorted
 			expectError:      false,
 		},
 		{
-			name:             "empty profiles directory",
-			createProfiles:   []string{},
-			expectedProfiles: []string{},
-			expectError:      false,
-		},
-		{
-			name:             "profiles with files (should ignore)",
-			createProfiles:   []string{"local", "hdfs"},
-			expectedProfiles: []string{"hdfs", "local"},
-			expectError:      false,
+			name:             "list without init",
+			initProfiles:     false,
+			expectedProfiles: nil,
+			expectError:      true,
 		},
 	}
 
@@ -149,22 +128,14 @@ func TestProfileManager_List(t *testing.T) {
 			repoRoot := filepath.Join(tmpDir, "repo")
 			baseDir := filepath.Join(tmpDir, "base")
 
-			// Create profiles directory
-			profilesDir := filepath.Join(baseDir, "conf", "profiles")
-			util.MkdirAll(profilesDir)
-
-			// Create test profiles
-			for _, profile := range tt.createProfiles {
-				util.MkdirAll(filepath.Join(profilesDir, profile))
-			}
-
-			// Create a file (not directory) to test filtering
-			if len(tt.createProfiles) > 0 {
-				os.WriteFile(filepath.Join(profilesDir, "notadir.txt"), []byte("test"), 0644)
-			}
-
 			paths := NewPaths(repoRoot, baseDir)
 			pm := NewProfileManager(paths)
+
+			if tt.initProfiles {
+				if err := pm.Init(false, nil); err != nil {
+					t.Fatalf("Failed to init profiles: %v", err)
+				}
+			}
 
 			profiles, err := pm.List()
 
@@ -198,25 +169,21 @@ func TestProfileManager_Apply(t *testing.T) {
 	tests := []struct {
 		name        string
 		profileName string
-		fromRepo    bool
 		expectError bool
 	}{
 		{
-			name:        "apply local profile from repo",
+			name:        "apply local profile",
 			profileName: "local",
-			fromRepo:    true,
 			expectError: false,
 		},
 		{
-			name:        "apply hdfs profile from repo",
+			name:        "apply hdfs profile",
 			profileName: "hdfs",
-			fromRepo:    true,
 			expectError: false,
 		},
 		{
 			name:        "apply non-existent profile",
 			profileName: "nonexistent",
-			fromRepo:    true,
 			expectError: true,
 		},
 	}
@@ -227,13 +194,10 @@ func TestProfileManager_Apply(t *testing.T) {
 			repoRoot := filepath.Join(tmpDir, "repo")
 			baseDir := filepath.Join(tmpDir, "base")
 
-			// Create repo profiles with test configs
-			setupTestProfiles(t, repoRoot)
-
 			paths := NewPaths(repoRoot, baseDir)
 			pm := NewProfileManager(paths)
 
-			err := pm.Apply(tt.profileName, tt.fromRepo)
+			err := pm.Apply(tt.profileName)
 
 			if tt.expectError {
 				if err == nil {
@@ -278,15 +242,12 @@ func TestProfileManager_Apply(t *testing.T) {
 				}
 			}
 
-			// Verify template variables were replaced
-			content, _ := os.ReadFile(hiveConfig)
-			if len(content) == 0 {
-				t.Error("Hive config is empty")
-			}
-			// Should not contain template markers if they were in source
-			contentStr := string(content)
-			if len(contentStr) > 0 && (contentStr[0:5] == "{{USER}}" || contentStr[0:7] == "{{HOME}}") {
-				t.Error("Template variables not replaced")
+			// For local profile, verify no hadoop configs
+			if tt.profileName == "local" {
+				hadoopDir := filepath.Join(currentConf, "hadoop")
+				if util.DirExists(hadoopDir) {
+					t.Error("Hadoop directory should not exist for local profile")
+				}
 			}
 		})
 	}
@@ -359,69 +320,5 @@ func TestProfileManager_Check(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Helper function to set up test profiles
-func setupTestProfiles(t *testing.T, repoRoot string) {
-	t.Helper()
-
-	profiles := []struct {
-		name       string
-		hasHadoop  bool
-		hasHive    bool
-		hasSpark   bool
-	}{
-		{name: "local", hasHadoop: false, hasHive: true, hasSpark: true},
-		{name: "hdfs", hasHadoop: true, hasHive: true, hasSpark: true},
-	}
-
-	for _, profile := range profiles {
-		profileDir := filepath.Join(repoRoot, "conf", "profiles", profile.name)
-
-		if profile.hasHadoop {
-			hadoopDir := filepath.Join(profileDir, "hadoop")
-			util.MkdirAll(hadoopDir)
-
-			hadoopConfigs := []string{"core-site.xml", "hdfs-site.xml", "mapred-site.xml", "yarn-site.xml"}
-			for _, config := range hadoopConfigs {
-				content := `<?xml version="1.0"?>
-<configuration>
-  <property>
-    <name>test.property</name>
-    <value>{{USER}}</value>
-  </property>
-</configuration>`
-				// Use .tmpl suffix to trigger template rendering
-				os.WriteFile(filepath.Join(hadoopDir, config+".tmpl"), []byte(content), 0644)
-			}
-		}
-
-		if profile.hasHive {
-			hiveDir := filepath.Join(profileDir, "hive")
-			util.MkdirAll(hiveDir)
-
-			hiveContent := `<?xml version="1.0"?>
-<configuration>
-  <property>
-    <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:postgresql://localhost:5432/metastore</value>
-  </property>
-  <property>
-    <name>hive.metastore.warehouse.dir</name>
-    <value>{{BASE_DIR}}/state/hive/warehouse</value>
-  </property>
-</configuration>`
-			os.WriteFile(filepath.Join(hiveDir, "hive-site.xml.tmpl"), []byte(hiveContent), 0644)
-		}
-
-		if profile.hasSpark {
-			sparkDir := filepath.Join(profileDir, "spark")
-			util.MkdirAll(sparkDir)
-
-			sparkContent := `spark.master=local[*]
-spark.home={{HOME}}/spark`
-			os.WriteFile(filepath.Join(sparkDir, "spark-defaults.conf.tmpl"), []byte(sparkContent), 0644)
-		}
 	}
 }

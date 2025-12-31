@@ -4,15 +4,16 @@ import (
 	"fmt"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/config/generator"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd(pathsGetter PathsGetter) *cobra.Command {
 	var (
 		force      bool
-		sourceRepo bool
-		profileDir string
 		user       string
+		dbURL      string
+		dbPassword string
 	)
 
 	cmd := &cobra.Command{
@@ -20,13 +21,11 @@ func newInitCmd(pathsGetter PathsGetter) *cobra.Command {
 		Short: "Initialize profiles for local-data-platform",
 		Long: `Initialize profiles for local-data-platform.
 
-By default, profiles are generated using Go struct definitions with the
-current user and base directory embedded in the configuration files.
-
-Use --source repo to copy profiles from the repository instead (legacy behavior).
+Profiles are generated using Go struct definitions with the current user
+and base directory embedded in the configuration files.
 
 Examples:
-  # Generate profiles with defaults (recommended)
+  # Generate profiles with defaults
   local-data profile init
 
   # Regenerate profiles, overwriting existing ones
@@ -35,23 +34,19 @@ Examples:
   # Generate with custom user (embedded in configs)
   local-data profile init --user daniel
 
-  # Use repository profiles directly (legacy behavior)
-  local-data profile init --source repo
-
-  # Use custom profile directory with repo source
-  local-data profile init --source repo --profile-dir /path/to/profiles`,
+  # Generate with custom database connection
+  local-data profile init --db-url "jdbc:postgresql://myhost:5432/hive_metastore" --db-password "secret"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			paths := pathsGetter()
 			pm := config.NewProfileManager(paths)
 
-			opts := config.InitOptions{
-				Force:      force,
-				SourceRepo: sourceRepo,
-				ProfileDir: profileDir,
+			opts := &generator.InitOptions{
 				User:       user,
+				DBUrl:      dbURL,
+				DBPassword: dbPassword,
 			}
 
-			if err := pm.Init(opts); err != nil {
+			if err := pm.Init(force, opts); err != nil {
 				return err
 			}
 
@@ -61,9 +56,9 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing profiles")
-	cmd.Flags().BoolVar(&sourceRepo, "source", false, "Use repository profiles (legacy behavior)")
-	cmd.Flags().StringVar(&profileDir, "profile-dir", "", "Custom profile directory (only with --source)")
 	cmd.Flags().StringVar(&user, "user", "", "Override username for template substitution")
+	cmd.Flags().StringVar(&dbURL, "db-url", "", "Override Hive metastore database connection URL (e.g., jdbc:postgresql://localhost:5432/metastore)")
+	cmd.Flags().StringVar(&dbPassword, "db-password", "", "Override Hive metastore database password")
 
 	return cmd
 }
