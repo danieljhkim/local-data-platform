@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Convenience wrapper for connecting to local HiveServer2 via Beeline.
+# Usage:
+#   hive-b                      # open interactive Beeline session
+#   hive-b -e "SELECT 1"       # run a one-off query
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+local_data="$script_dir/local-data"
+
+exec "$local_data" env exec -- beeline \
+    -u "jdbc:hive2://localhost:10000" \
+    "$@"
