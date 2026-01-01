@@ -25,24 +25,16 @@ What you get:
 
 **Prerequisites:**
 
-- Java 17
 - Homebrew
-- Hadoop + Hive + Spark (required)
 - Postgres Hive metastore setup: [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
-- Go 1.21+ (only if building from source)
-
-Suggested installs:
-
-```bash
-brew install hadoop hive jdk@17 apache-spark postgresql@16
-```
-> If you plan to build from source: `brew install go`
 
 ---
 
 ## Installation
 
 ### Option 1: Install via Homebrew (Recommended)
+
+Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17). Postgres is not included, you need to install it manually.
 
 ```bash
 brew install danieljhkim/tap/local-data
@@ -58,6 +50,9 @@ make build
 # Install to /usr/local/bin (optional)
 make install
 
+# Install dependencies
+brew install go hadoop hive jdk@17 apache-spark postgresql@16
+
 ```
 
 ---
@@ -67,8 +62,14 @@ make install
 Before you start, you need to make sure that the postgres metastore is setup and running. See [METASTORE_SETUP.md](docs/METASTORE_SETUP.md) for more details.
 
 ```bash
-# Initialize profiles (creates local and hdfs profiles in $BASE_DIR/conf/profiles/)
+# Initialize profiles using default values (creates local and hdfs profiles in $BASE_DIR/conf/profiles/)
 local-data profile init
+
+# Note that the default values are:
+# - user: $USER
+# - base-dir: $HOME/local-data-platform
+# - db-url: jdbc:postgresql://localhost:5432/metastore
+# - db-password: password
 
 # optional flags, if you'd like to customize the profiles
 local-data profile init --user daniel --base-dir /Users/daniel/local-data-platform --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "secret"

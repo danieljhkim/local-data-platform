@@ -7,10 +7,22 @@ This doc walks through:
 
 - Installing + starting Postgres (Homebrew)
 - Creating the metastore DB/user
-- Verifying connectivity
-- Matching settings in `hive-site.xml`
+- Initializing the profiles
+- Adding the postgres JDBC driver jar (for hive and spark)
 
 ---
+
+## 0) Prerequisites
+
+- local-data CLI + dependencies installed (via Homebrew)
+
+```bash
+# install local-data CLI + dependencies
+brew install danieljhkim/tap/local-data
+
+# or build from source
+brew install hadoop hive jdk@17 apache-spark
+```
 
 ## 1) Install + start Postgres
 
@@ -29,7 +41,7 @@ brew services start postgresql@16
 Add it to PATH:
 
 ```bash
-export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc
 ```
 
 Confirm it’s up:
@@ -93,9 +105,11 @@ local-data profile init --user daniel --db-url "jdbc:postgresql://localhost:5432
 
 For hive and spark to work with the postgres metastore, we need to ensure the Postgres JDBC jar is available.
 
-what to do:
+### what to do:
+
 - check if the jar is available in $HIVE_HOME/lib
 - if not, download the jar from Maven Central and place it in `$HIVE_HOME/lib` or `$BASE_DIR/lib/jars/`
+  - i.e. `https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar`
 
 Once the jar is available, just run `local-data start` to start the services and you're good to go. Schema will be initialized automatically. And the jar will be added to spark as well.
 
