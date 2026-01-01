@@ -246,12 +246,12 @@ func FindHiveHome() string {
 
 // DetectionResult holds the result of environment detection
 type DetectionResult struct {
-	JavaHome      string
-	JavaMajor     int
-	HadoopHome    string
-	HadoopPrefix  string // Brew prefix for PATH (may differ from Home)
-	HiveHome      string
-	SparkHome     string
+	JavaHome     string
+	JavaMajor    int
+	HadoopHome   string
+	HadoopPrefix string // Brew prefix for PATH (may differ from Home)
+	HiveHome     string
+	SparkHome    string
 }
 
 // DetectEnvironment performs comprehensive environment detection

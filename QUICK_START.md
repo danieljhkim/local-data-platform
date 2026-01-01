@@ -1,11 +1,6 @@
-# Local Data Engineering Environment (macOS)
+# Local Data Engineering Environment (macOS) — Quick Start
 
-This guide sets up a **local, pseudo-distributed** environment on macOS for
-learning and development:
-
-- **Hadoop (HDFS + YARN)** running on your machine (single host)
-- **Hive** using a local metastore (Postgres) and storing data in HDFS (hdfs profile) or local file system (local profile)
-- **Spark** submitting jobs to YARN and reading/writing HDFS + Hive tables
+This guide walks you through setting up a **local, pseudo-distributed** data engineering environment on macOS using the `local-data` CLI.
 
 ### Profile Types:
 1. **local:** hive + spark on local file system warehouse
@@ -17,149 +12,57 @@ learning and development:
 
 - Java 17 (required)
 - Homebrew
-- Hadoop + Hive (required)
-- Spark
-- Postgres (only required if your Hive profile uses Postgres metastore)
+- Hadoop + Hive + Spark (required)
+- Postgres Hive metastore (required)
 
 Suggested Homebrew installs:
 
 ```bash
-brew install hadoop hive jdk@17 apache-spark
+brew install hadoop hive jdk@17 apache-spark postgresql@16
+```
+
+> Go is only required if building from source.
+
+***Note**: Before you start, you need to make sure that the postgres metastore is setup and running. See [METASTORE_SETUP.md](docs/METASTORE_SETUP.md) for more details.*
+
+---
+
+## Installation
+
+### Option 1: Install via Homebrew (Recommended)
+
+```bash
+brew install danieljhkim/tap/local-data
+```
+
+
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/danieljhkim/local-data-platform.git
+cd local-data-platform
+make build
+
+# Optional
+make install
 ```
 
 ---
 
-## Install / PATH
-
-Make entrypoints executable:
+### Profile Management
 
 ```bash
-make perms
-```
-
-Add this repo’s `bin/` to your PATH:
-
-```bash
-make path
-```
-
-Paste the printed export line into your shell profile (for zsh: `~/.zshrc`).
-
----
-
-## Base directory
-
-By default, the CLI writes state under:
-
-```text
-$HOME/local-data-platform
-```
-
-Override with:
-
-```bash
-export BASE_DIR="$HOME/some/other/path"
-```
-
-State layout:
-
-```text
-$BASE_DIR/
-  conf/
-    active_profile
-    current/
-      hadoop/
-      hive/
-      spark/
-    profiles/          # only after `local-data profile init`
-  state/
-    hdfs/{logs,pids}/
-    yarn/{logs,pids}/
-    hive/{logs,pids,warehouse}/
-```
-
----
-
-## Profiles + runtime config overlay
-
-Profiles are templates in `conf/profiles/<name>/{hadoop,hive,spark}`.
-
-To copy repo profiles into `$BASE_DIR` for local edits:
-
-```bash
+# Initialize profiles
 local-data profile init
-```
 
-List profiles:
+# optional flags, if you'd like to customize the profiles
+local-data profile init --user daniel --base-dir /Users/daniel/local-data-platform --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "secret"
 
-```bash
-local-data profile list
-```
+# Set active profile
+local-data profile set hdfs
 
-Activate a profile (also applies the runtime overlay):
-
-```bash
+# Or set to local if you just want hive + spark without HDFS
 local-data profile set local
-```
-
-Check the overlay:
-
-```bash
-local-data profile check
-```
-
-Overlay output:
-
-```text
-$BASE_DIR/conf/current/{hadoop,hive,spark}
-```
-
-This avoids mutating Homebrew config directories.
-
----
-
-## Start/stop/status/logs
-
-Start everything (HDFS → YARN → Hive):
-
-```bash
-local-data start
-```
-
-Stop everything (Hive → YARN → HDFS):
-
-```bash
-local-data stop
-```
-
-Individual services:
-
-```bash
-local-data start hdfs
-local-data start yarn
-local-data start hive
-
-local-data stop hive
-```
-
-Status:
-
-```bash
-local-data status
-local-data status hive
-```
-
-Logs (Ctrl-C to stop):
-
-```bash
-local-data logs
-local-data hive logs
-```
-
-If Hive ports are stuck (9083 metastore / 10000 hiveserver2):
-
-```bash
-local-data hive stop --force
 ```
 
 ---
@@ -176,71 +79,50 @@ local-data env print
 
 ## CLI wrapper commands
 
-These wrappers live under `bin/` and all run via `local-data env exec`, so they
-automatically use the active profile’s runtime overlay in `$BASE_DIR/conf/current`.
+These wrapper commands are built into the `local-data` CLI and automatically compute and inject the active profile’s runtime environment before execution.
 
 ### Beeline wrapper
 
 ```bash
-hive-b
-hive-b -e "SELECT 1"
+local-data hive
+local-data hive -e "SELECT 1"
 ```
 
 ### HDFS wrapper
 
 ```bash
 # HDFS subcommands
-hdfs-b version
-hdfs-b dfs -ls /
-hdfs-b dfs -mkdir -p /spark-history
-hdfs-b dfs -put ./local_file.parquet /data/
+local-data hdfs version
+local-data hdfs dfs -ls /
+local-data hdfs dfs -mkdir -p /spark-history
+local-data hdfs dfs -put ./local_file.parquet /data/
 ```
 
 ### YARN wrapper
 
 ```bash
 # Only relevant if you start YARN (local-data start yarn)
-yarn-b node -list
-yarn-b application -list
-yarn-b logs -applicationId <application_...>
+local-data yarn node -list
+local-data yarn application -list
+local-data yarn logs -applicationId <application_...>
 ```
 
 ### PySpark wrapper
 
 ```bash
 # Interactive PySpark (uses spark-defaults.conf from the active profile)
-pyspark-b
+local-data pyspark
 
 # Override config at launch time
-pyspark-b --conf spark.sql.shuffle.partitions=4
+local-data pyspark --conf spark.sql.shuffle.partitions=4
 ```
 
 ### spark-submit wrapper
 
 ```bash
 # Run a PySpark job with the profile’s env + conf
-spark-submit-b ./jobs/etl_job.py --input hdfs:///data/raw --output hdfs:///data/curated
+local-data spark-submit ./jobs/etl_job.py --input hdfs:///data/raw --output hdfs:///data/curated
 
 # Include additional Python deps
-spark-submit-b --py-files ./deps.zip ./jobs/etl_job.py
+local-data spark-submit --py-files ./deps.zip ./jobs/etl_job.py
 ```
-
-
----
-
-
-## Hive metastore notes
-
-Step-by-step Postgres setup: see [docs/METASTORE_SETUP.md](docs/METASTORE_SETUP.md).
-
-The default `local` profile’s `hive-site.xml` points at a Postgres metastore:
-
-```text
-jdbc:postgresql://localhost:5432/metastore
-```
-
-If you keep that configuration, make sure Postgres is running and the
-DB/user/password match your profile.
-
-If you use Spark with Postgres-backed Hive metastore, Spark may also need
-the Postgres JDBC jar available on its classpath.

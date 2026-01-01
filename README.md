@@ -1,105 +1,215 @@
+# local-data-platform
 
-# local-data-platform (LDP)
+- **macOS only** (Homebrew-first)
+- Go-based CLI (`local-data`)
 
-- *only macOS is supported at this time*
+Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on cloud, and the disconnect between the cloud and my local machine.
 
-Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on clound, and the disconnect between the cloud and my local machine. 
+If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity. 
 
-If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity.
+Setting up a local environment is a pain, and I've had to do it many times. So I've created a tool that will help you set up a local environment quickly and easily.
 
-Local-data-platform is a local, single-machine Hadoop (HDFS + YARN) + Hive + spark environment manager with a small Bash CLI. 
+Local-data-platform is a local, single-machine Hadoop (HDFS + YARN) + Hive + Spark environment manager and a wrapper around the Hadoop, Hive, and Spark commands with a modern Go CLI.
 
 What you get:
 
-- A modular `local-data` CLI to manage HDFS/YARN/Hive/Spark in one place.
-- A runtime config overlay under `$BASE_DIR/conf/current` (hive-site.xml,
-  core-site.xml, logs, data etc all lives here) to easily change between profiles and keep things organized.
+- A modular `local-data` CLI to manage HDFS/YARN/Hive/Spark in one place
+- **Profile overlays**: `$BASE_DIR/conf/profiles/<name>` → runtime overlay at `$BASE_DIR/conf/current`
+- **Typed config generation**: configs are defined as Go structs (`internal/config/schema`) and serialized to XML/conf files
+- **Hermetic execution**: wrapper commands auto-inject the active runtime overlay environment
 - Per-service logs + status + stop/start helpers
+- Integrated wrapper commands for `hdfs`, `hive`, `yarn`, `pyspark`, and `spark-submit`
 - 2 profile choices:
-  1. **local**: local spark and hive on local filesytem warehouse (in `$BASE_DIR/state/hive/warehouse`)
-  2. **hdfs**: YARN + NameNode + DataNode + spark + hive on hdfs warehouse
+  1. **local**: local spark and hive (warehouse on local filesystem)
+  2. **hdfs**: YARN + NameNode + DataNode + spark + hive (warehouse on HDFS)
 
-> Note: *default value of `$BASE_DIR`=/Users/{whoami}/local-data-platform*
+**Prerequisites:**
 
-**Prequisite Setup:**
-
-- Postgres Hive metastore setup: [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
 - Java 17
 - Homebrew
-- Hadoop + Hive (required)
-- Spark (recommended if you need spark to access tables via hive metastore)
+- Hadoop + Hive + Spark (required)
+- Postgres Hive metastore setup: [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
+- Go 1.21+ (only if building from source)
 
 Suggested installs:
 
 ```bash
 brew install hadoop hive jdk@17 apache-spark postgresql@16
 ```
+> If you plan to build from source: `brew install go`
 
 ---
 
-## Quick start
+## Installation
+
+### Option 1: Install via Homebrew (Recommended)
 
 ```bash
-# makes scrips executable
-make perms 
-# add this output to PATH
-make path
+brew install danieljhkim/tap/local-data
+```
 
-# instantiates local and hdfs profiles in $BASE_DIR/conf/profiles/
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/danieljhkim/local-data-platform.git
+cd local-data-platform
+make build
+
+# Install to /usr/local/bin (optional)
+make install
+
+```
+
+---
+
+## Quick Start
+
+Before you start, you need to make sure that the postgres metastore is setup and running. See [METASTORE_SETUP.md](docs/METASTORE_SETUP.md) for more details.
+
+```bash
+# Initialize profiles (creates local and hdfs profiles in $BASE_DIR/conf/profiles/)
 local-data profile init
-# sets current profile to hdfs (hdfs + hive + spark);
+
+# optional flags, if you'd like to customize the profiles
+local-data profile init --user daniel --base-dir /Users/daniel/local-data-platform --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "secret"
+
+# Set current profile to hdfs (hdfs + hive + spark)
 local-data profile set hdfs
-# set current profile to local, if you just want hive + spark
+
+# Or set to local if you just want hive + spark without HDFS
 local-data profile set local
 
-# starts YARN, nameNode, dataNode, hiveServer2, metastore
+# Start all services (HDFS → YARN → Hive) or (hive only) depending on the profile
 local-data start
 
-# check the status of the processes
+# Run a query
+local-data hive -e "SHOW DATABASES"
+
+# Start a PySpark shell
+local-data pyspark
+
+# Submit a Spark job (using the active profile's spark-submit)
+local-data spark-submit my_job.py
+
+# Check the status of the processes
 local-data status
+
+# View logs
 local-data logs
 
-# stop all
+# Stop all services (in reverse order: Hive → YARN → HDFS)
 local-data stop
 ```
 
-## Common CLI Usage
+---
 
-Once things are running, you can call hive, pyspark, hdfs, yarn like so:
+## How It Works
+
+- Profiles are generated programmatically from Go structs (no hand-edited XML required)
+- `local-data profile init` generates profile templates under `$BASE_DIR/conf/profiles/`
+- `local-data profile set <name>` materializes the runtime overlay under `$BASE_DIR/conf/current/`
+- Every command computes and injects the environment for the active profile (hermetic execution)
+- Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`
+- `local-data profile set <name>` materializes a runtime overlay at `$BASE_DIR/conf/current/{hadoop,hive,spark}`
+- Wrapper commands (hdfs, hive, yarn, etc.) automatically use the overlay configuration
+- `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`, `HIVE_CONF_DIR`, and `PATH` set to use the overlay
+- Services write logs to `$BASE_DIR/state/<service>/logs`
+- PID files are managed in `$BASE_DIR/state/<service>/pids`
+
+---
+
+## Development
+
+### Building
 
 ```bash
-# starts interactive beeline cli
-hive-b
-# run a query directly
-hive-b -e "SHOW DATABASES"
+# Build the binary
+make build
 
-# starts interactive pyspark
-pyspark-b
-# with custom config
-pyspark-b --master yarn
+# Run unit tests (no system dependencies)
+make test
 
-# spark-submit job
-spark-submit-b my_job.py
+# Integration tests (requires Hadoop/Hive/Spark/Postgres/Java 17)
+make test-integration
 
-# hdfs commands
-hdfs-b dfs -ls /
-hdfs-b dfs -mkdir -p /user/hive/warehouse
-hdfs-b dfs -put local_file.parquet /data/
+# Run tests with coverage
+make test-coverage
 
-# yarn commands
-yarn-b top
+# Format code
+make format
+
+# Run linters
+make vet
+make lint  # Requires golangci-lint
+
+# Clean build artifacts
+make clean
 ```
 
-## How it works
+### Project Structure
 
-- Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`.
-- `local-data profile set <name>` materializes a runtime overlay at
-  `$BASE_DIR/conf/current/{hadoop,hive,spark}`.
-- `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`,
-  `HIVE_CONF_DIR`, and `PATH` set to use the overlay.
-- `hive-b` invokes beeline cli
-- `hdfs-b` invokes hdfs cli
-- `yarn-b` invokes yarn cli
-- `pyspark-b` invokes pyspark cli
-- `spark-submit-b` invokes spark-submit cli
+```
+local-data-platform/
+├── cmd/local-data/          # Main entry point
+├── internal/
+│   ├── cli/                 # Cobra CLI commands
+│   │   ├── env/             # env print/exec/doctor
+│   │   ├── profile/         # profile init/list/set/check
+│   │   ├── service/         # start/stop/status
+│   │   ├── wrappers/        # wrapper commands (hdfs, hive, yarn, etc.)
+│   │   ├── logs.go          # combined logs
+│   │   └── root.go          # root command wiring
+│   ├── config/              # config + profile management
+│   │   ├── generator/       # XML/conf generation + overrides merge
+│   │   ├── profiles/        # built-in profile definitions
+│   │   └── schema/          # typed config structs (Hadoop/Hive/Spark)
+│   ├── env/                 # environment detection + computation
+│   ├── service/             # service lifecycle (ProcessManager)
+│   │   ├── hdfs/
+│   │   ├── yarn/
+│   │   └── hive/
+│   └── util/                # shared helpers (fs/xml/shell/log)
+└── Makefile
+```
 
+---
+
+## Configuration Profiles
+
+### Local Profile
+
+Uses local filesystem for Hive warehouse:
+- No HDFS required
+- Warehouse: `$BASE_DIR/state/hive/warehouse`
+- Faster startup, simpler setup
+- Good for Hive/Spark development
+
+### HDFS Profile
+
+Full Hadoop stack with HDFS:
+- HDFS NameNode + DataNode
+- YARN ResourceManager + NodeManager
+- Hive Metastore + HiveServer2
+- Warehouse on HDFS: `/user/hive/warehouse`
+- Complete cluster simulation
+
+---
+
+## Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request.
+
+
+## Acknowledgments
+
+Built with:
+- Brew, Go, Cobra, and other great open-source softwares.
+
+Special thanks to:
+  - Claude Code (first time using it, and it's pretty good)
+
+---
+
+## License
+
+See [LICENSE](LICENSE) for details.

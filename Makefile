@@ -92,18 +92,6 @@ deps: ## Download dependencies
 	go mod tidy
 	@echo "✓ Dependencies updated"
 
-##@ Legacy (Bash)
-
-format-bash: ## Format Bash scripts (legacy)
-	@command -v shfmt >/dev/null 2>&1 || { echo "ERROR: shfmt not found. Install it: brew install shfmt" >&2; exit 1; }
-	find lib/local_data -type f -name '*.sh' -print0 | xargs -0 shfmt -i 4 -sr -w
-
-perms: ## Set executable permissions on binary
-	chmod +x $(BUILD_DIR)/$(BINARY_NAME)
-
-path: ## Show PATH export command
-	@echo 'Add this to your shell profile (e.g. ~/.zshrc or ~/.bashrc):'
-	@echo '  export PATH="$(CURDIR)/bin:$$PATH"'
 
 ##@ Information
 

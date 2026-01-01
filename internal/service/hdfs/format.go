@@ -139,10 +139,10 @@ func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
 		path string
 		perm string // permissions to set
 	}{
-		{"/tmp", "1777"},                       // sticky bit
-		{"/user/" + username, ""},              // default perms
-		{"/user/hive/warehouse", "g+w"},        // group writable
-		{"/spark-history", "1777"},             // sticky bit
+		{"/tmp", "1777"},                // sticky bit
+		{"/user/" + username, ""},       // default perms
+		{"/user/hive/warehouse", "g+w"}, // group writable
+		{"/spark-history", "1777"},      // sticky bit
 	}
 
 	for _, dir := range dirs {

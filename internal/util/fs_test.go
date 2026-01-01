@@ -48,11 +48,11 @@ func TestCopyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	tests := []struct {
-		name          string
-		setupSrc      func() string
-		dst           string
-		expectError   bool
-		validateCopy  func(t *testing.T, dst string)
+		name         string
+		setupSrc     func() string
+		dst          string
+		expectError  bool
+		validateCopy func(t *testing.T, dst string)
 	}{
 		{
 			name: "copy regular file",

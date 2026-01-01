@@ -1,0 +1,8 @@
+
+### DevBox ###
+/logs/*.log
+/.box/reports/
+/.box/state/
+/.box/state/**
+/.box/env/.env.local
+

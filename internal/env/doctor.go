@@ -15,10 +15,10 @@ type DoctorCheck struct {
 
 // DoctorResult holds the results of all checks
 type DoctorResult struct {
-	Target      string         // Target context (e.g., "start hdfs")
-	Checks      []DoctorCheck  // All checks performed
-	JavaMajor   int            // Java major version (0 if not found)
-	HasFailures bool           // true if any required check failed
+	Target      string        // Target context (e.g., "start hdfs")
+	Checks      []DoctorCheck // All checks performed
+	JavaMajor   int           // Java major version (0 if not found)
+	HasFailures bool          // true if any required check failed
 }
 
 // RunDoctor performs dependency checking based on the target context
