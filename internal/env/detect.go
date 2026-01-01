@@ -1,12 +1,9 @@
 package env
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -46,83 +43,23 @@ func NewJavaDetector() *JavaDetector {
 	return &JavaDetector{}
 }
 
-// FindJavaHome finds the Java installation home directory
-// Prefers Java 17 if available, otherwise returns any available Java
-// Mirrors: /usr/libexec/java_home -v 17 || /usr/libexec/java_home
+// FindJavaHome returns the hardcoded Java 17 path from Homebrew installation
+// Java 17 is automatically downloaded via brew during installation
 func (j *JavaDetector) FindJavaHome() string {
-	// First check JAVA_HOME environment variable
-	if javaHome := os.Getenv("JAVA_HOME"); javaHome != "" {
-		return javaHome
+	const java17Home = "/opt/homebrew/opt/openjdk@17"
+	if _, err := os.Stat(java17Home); err == nil {
+		return java17Home
 	}
-
-	// On macOS, use /usr/libexec/java_home
-	javaHomeBin := "/usr/libexec/java_home"
-	if _, err := os.Stat(javaHomeBin); err == nil {
-		// Try Java 17 first (preferred for Hadoop/Hive)
-		cmd := exec.Command(javaHomeBin, "-v", "17")
-		if output, err := cmd.Output(); err == nil {
-			return strings.TrimSpace(string(output))
-		}
-
-		// Fallback to any available Java version
-		cmd = exec.Command(javaHomeBin)
-		if output, err := cmd.Output(); err == nil {
-			return strings.TrimSpace(string(output))
-		}
-	}
-
 	return ""
 }
 
 // MajorVersion returns the major version of the installed Java
-// Parses output from: java -version
-// Returns 0 if Java is not found or version cannot be parsed
+// Returns 17 for the hardcoded Java 17 installation, or 0 if Java is not found
 func (j *JavaDetector) MajorVersion() int {
-	cmd := exec.Command("java", "-version")
-	// java -version outputs to stderr, not stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return 0
+	if j.FindJavaHome() != "" {
+		return 17
 	}
-
-	output := stderr.String()
-
-	// Parse version from output like:
-	// openjdk version "17.0.9" 2023-10-17
-	// java version "1.8.0_392"
-	// Regex to match version string
-	re := regexp.MustCompile(`version "([^"]+)"`)
-	matches := re.FindStringSubmatch(output)
-	if len(matches) < 2 {
-		return 0
-	}
-
-	versionStr := matches[1]
-
-	// Handle both old format (1.8.x) and new format (17.x)
-	parts := strings.Split(versionStr, ".")
-	if len(parts) == 0 {
-		return 0
-	}
-
-	// If starts with "1.", use second part (e.g., "1.8" -> 8)
-	if parts[0] == "1" && len(parts) > 1 {
-		major, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return 0
-		}
-		return major
-	}
-
-	// Otherwise, use first part (e.g., "17.0.9" -> 17)
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0
-	}
-
-	return major
+	return 0
 }
 
 // IsInstalled checks if java command is available
