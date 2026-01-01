@@ -230,7 +230,7 @@ func (y *YARNService) Logs() error {
 		if _, err := os.Stat(logFile); err == nil {
 			cmd := exec.Command("tail", "-n", "120", logFile)
 			cmd.Stdout = os.Stdout
-			cmd.Run()
+			_ = cmd.Run()
 		} else {
 			fmt.Println("(missing)")
 		}

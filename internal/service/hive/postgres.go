@@ -91,7 +91,7 @@ func EnsurePostgresJDBCDriver(hiveHome, sparkHome, baseDir string) (string, erro
 			msg += "\nTip: if you want to use a custom jars directory, pass baseDir from the CLI/config and set HIVE_AUX_JARS_PATH accordingly.\n"
 		}
 
-		return "", fmt.Errorf(msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	// Ensure the JAR is also present in SPARK_HOME/jars
@@ -157,28 +157,4 @@ func findPostgresJar(dir string) (string, error) {
 
 	sort.Strings(candidates)
 	return candidates[len(candidates)-1], nil
-}
-
-// isDirWritable checks if a directory is writable
-func isDirWritable(dir string) bool {
-	// Check if directory exists
-	info, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-
-	if !info.IsDir() {
-		return false
-	}
-
-	// Try to create a temporary file
-	tmpFile := filepath.Join(dir, ".write_test")
-	f, err := os.Create(tmpFile)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	os.Remove(tmpFile)
-
-	return true
 }

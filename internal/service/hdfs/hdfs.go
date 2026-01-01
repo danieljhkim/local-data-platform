@@ -47,7 +47,7 @@ func NewHDFSService(paths *config.Paths) (*HDFSService, error) {
 func (h *HDFSService) Start() error {
 	// Ensure Hadoop is available
 	if h.env.HadoopHome == "" {
-		return fmt.Errorf("Hadoop not found (HADOOP_HOME not set). Install with: brew install hadoop")
+		return fmt.Errorf("hadoop not found (HADOOP_HOME not set). Install with: brew install hadoop")
 	}
 
 	// Ensure local storage directories exist

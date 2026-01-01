@@ -8,43 +8,13 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/config"
 )
 
-// setupTestProfile creates a minimal test profile structure
+// setupTestProfile creates a minimal test profile structure using ProfileManager.Init()
 func setupTestProfile(tmpDir string) error {
-	profileDir := filepath.Join(tmpDir, "conf", "profiles", "local")
-
-	// Create directory structure
-	dirs := []string{
-		filepath.Join(profileDir, "hadoop"),
-		filepath.Join(profileDir, "hive"),
-		filepath.Join(profileDir, "spark"),
-	}
-
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return err
-		}
-	}
-
-	// Create minimal Hadoop config
-	hadoopConfig := `<?xml version="1.0"?>
-<configuration>
-</configuration>`
-	os.WriteFile(filepath.Join(profileDir, "hadoop", "core-site.xml"), []byte(hadoopConfig), 0644)
-	os.WriteFile(filepath.Join(profileDir, "hadoop", "hdfs-site.xml"), []byte(hadoopConfig), 0644)
-	os.WriteFile(filepath.Join(profileDir, "hadoop", "yarn-site.xml"), []byte(hadoopConfig), 0644)
-	os.WriteFile(filepath.Join(profileDir, "hadoop", "mapred-site.xml"), []byte(hadoopConfig), 0644)
-
-	// Create minimal Hive config
-	hiveConfig := `<?xml version="1.0"?>
-<configuration>
-</configuration>`
-	os.WriteFile(filepath.Join(profileDir, "hive", "hive-site.xml"), []byte(hiveConfig), 0644)
-
-	// Create minimal Spark config
-	sparkConfig := ``
-	os.WriteFile(filepath.Join(profileDir, "spark", "spark-defaults.conf"), []byte(sparkConfig), 0644)
-
-	return nil
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+	paths := config.NewPaths(repoRoot, baseDir)
+	pm := config.NewProfileManager(paths)
+	return pm.Init(false, nil)
 }
 
 func TestNewHiveService(t *testing.T) {

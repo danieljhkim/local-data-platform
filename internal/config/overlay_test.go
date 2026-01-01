@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/danieljhkim/local-data-platform/internal/config/generator"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -98,6 +100,61 @@ func TestProfileManager_Init(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+
+	paths := NewPaths(repoRoot, baseDir)
+	pm := NewProfileManager(paths)
+
+	// Custom DB options
+	customDBUrl := "jdbc:postgresql://custom-host:5432/mydb"
+	customDBPassword := "mypassword"
+
+	opts := &generator.InitOptions{
+		DBUrl:      customDBUrl,
+		DBPassword: customDBPassword,
+	}
+
+	// Init with custom options
+	if err := pm.Init(false, opts); err != nil {
+		t.Fatalf("Failed to init profiles: %v", err)
+	}
+
+	// Verify custom values in profile directory
+	profileHiveConfig := filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml")
+	content, err := os.ReadFile(profileHiveConfig)
+	if err != nil {
+		t.Fatalf("Failed to read profile hive-site.xml: %v", err)
+	}
+	if !strings.Contains(string(content), customDBUrl) {
+		t.Errorf("Profile hive-site.xml should contain custom DB URL %q", customDBUrl)
+	}
+	if !strings.Contains(string(content), customDBPassword) {
+		t.Errorf("Profile hive-site.xml should contain custom DB password")
+	}
+
+	// Now set the profile (this should preserve the custom values)
+	if err := pm.Set("hdfs"); err != nil {
+		t.Fatalf("Failed to set profile: %v", err)
+	}
+
+	// Verify custom values are preserved in current overlay
+	currentHiveConfig := filepath.Join(paths.CurrentConfDir(), "hive", "hive-site.xml")
+	currentContent, err := os.ReadFile(currentHiveConfig)
+	if err != nil {
+		t.Fatalf("Failed to read current hive-site.xml: %v", err)
+	}
+
+	if !strings.Contains(string(currentContent), customDBUrl) {
+		t.Errorf("Current hive-site.xml should contain custom DB URL %q\nContent: %s", customDBUrl, string(currentContent))
+	}
+	if !strings.Contains(string(currentContent), customDBPassword) {
+		t.Errorf("Current hive-site.xml should contain custom DB password\nContent: %s", string(currentContent))
 	}
 }
 
@@ -196,6 +253,11 @@ func TestProfileManager_Apply(t *testing.T) {
 
 			paths := NewPaths(repoRoot, baseDir)
 			pm := NewProfileManager(paths)
+
+			// Initialize profiles first (Apply now copies from conf/profiles/)
+			if err := pm.Init(false, nil); err != nil {
+				t.Fatalf("Failed to init profiles: %v", err)
+			}
 
 			err := pm.Apply(tt.profileName)
 

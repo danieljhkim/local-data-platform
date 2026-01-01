@@ -16,6 +16,7 @@ Local-data-platform (LDP) is a **Go-based** CLI tool for managing a local Hadoop
 **Key Design Patterns:**
 - **Hermetic execution**: All commands automatically apply runtime overlay via environment computation
 - **Fail-safe formatting**: HDFS NameNode auto-formats on first run with verification
+- **Auto schema initialization**: Hive metastore schema auto-detected and initialized on first run (Postgres)
 - **Process discovery**: Multiple fallback mechanisms (PID files → `jps` → `pgrep`) for robust service management
 - **Silent overlay application**: Profile overlays applied automatically without user-facing output for seamless experience
 
@@ -107,6 +108,9 @@ internal/
 │   │   └── util.go        # Process discovery (jps/pgrep), safe mode checks
 │   ├── yarn/              # YARN ResourceManager/NodeManager management
 │   └── hive/              # Hive Metastore/HiveServer2 management
+│       ├── hive.go        # HiveService.Start/Stop/Status
+│       ├── schema.go      # Auto-detection and initialization of metastore schema
+│       └── postgres.go    # Postgres JDBC driver auto-discovery
 └── util/                  # Shared utilities
     ├── fs.go              # File operations (CopyDir, MkdirAll, etc.)
     ├── xml.go             # XML parsing (ParseNameNodeDirs from hdfs-site.xml)
@@ -184,6 +188,15 @@ Critical logic in `internal/service/hdfs/format.go`:
 - **Capture and show errors** instead of silencing them
 
 Common pitfall avoided: Checking PID before VERSION file caused race condition where failing NameNode would block formatting.
+
+### Hive Metastore Schema Auto-Initialization
+Critical logic in `internal/service/hive/schema.go`:
+- **Detect Postgres metastore**: Check `hive-site.xml` for `org.postgresql.Driver` or `jdbc:postgresql:`
+- **Check schema status**: Run `schematool -dbType postgres -info` to detect if initialized
+- **Auto-initialize if needed**: Run `schematool -dbType postgres -initSchema` on first use
+- **Graceful degradation**: If schematool fails or is unavailable, log warning and continue
+
+The schema check runs during `local-data start` and `local-data start hive` before starting the Metastore service.
 
 ### Wrapper Commands
 All wrapper commands (`hdfs`, `hive`, `yarn`, `pyspark`, `spark-submit`, `hadoop`) use the same pattern:
@@ -277,6 +290,10 @@ profiles:
    - `format.go:CreateCommonHDFSDirs()` → Create /tmp, /user/*, /spark-history
 3. `service/yarn/yarn.go:Start()` → Start YARN
 4. `service/hive/hive.go:Start()` → Start Hive
+   - `hive.go:ensurePostgresJDBC()` → Ensure Postgres JDBC driver is available
+   - `schema.go:ensureMetastoreSchema()` → Check and init schema if needed
+   - `hive.go:startMetastore()` → Start Metastore via ProcessManager
+   - `hive.go:startHiveServer2()` → Start HiveServer2 via ProcessManager
 
 ### Profile Activation (`local-data profile set hdfs`)
 1. `cli/profile/set.go:newSetCmd()` → Parse profile name
@@ -316,4 +333,10 @@ profiles:
 - **Cause**: Stale overlay in `conf/current/`
 - **Solution**: `local-data profile set <name>` (re-applies overlay)
 - **Verify**: `local-data profile check`
+
+### Hive metastore "schema not initialized" errors
+- **Expected behavior**: Schema is auto-initialized on first `local-data start` or `local-data start hive`
+- **Manual check**: `schematool -dbType postgres -info`
+- **Manual init**: `schematool -dbType postgres -initSchema`
+- **Verify Postgres**: Ensure Postgres is running and credentials in `hive-site.xml` are correct
 

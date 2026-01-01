@@ -15,9 +15,10 @@ import (
 
 // HiveService manages the Hive Metastore and HiveServer2 services
 type HiveService struct {
-	paths   *config.Paths
-	env     *env.Environment
-	procMgr *service.ProcessManager
+	paths                 *config.Paths
+	env                   *env.Environment
+	procMgr               *service.ProcessManager
+	usesPostgresMetastore bool
 }
 
 // NewHiveService creates a new Hive service manager
@@ -57,6 +58,11 @@ func (h *HiveService) Start() error {
 		return err
 	}
 
+	// Ensure metastore schema is initialized (Postgres only)
+	if err := h.ensureMetastoreSchema(); err != nil {
+		return err
+	}
+
 	// Start Metastore
 	if err := h.startMetastore(); err != nil {
 		return err
@@ -71,6 +77,7 @@ func (h *HiveService) Start() error {
 }
 
 // ensurePostgresJDBC ensures Postgres JDBC driver is available if needed
+// Also sets h.usesPostgresMetastore if Postgres is detected
 func (h *HiveService) ensurePostgresJDBC() error {
 	hiveConfDir := h.env.HiveConfDir
 	hiveSiteXML := filepath.Join(hiveConfDir, "hive-site.xml")
@@ -82,6 +89,8 @@ func (h *HiveService) ensurePostgresJDBC() error {
 			contentStr := string(content)
 			if strings.Contains(contentStr, "jdbc:postgresql:") ||
 				strings.Contains(contentStr, "org.postgresql.Driver") {
+
+				h.usesPostgresMetastore = true
 
 				util.Log("Postgres metastore detected, ensuring JDBC driver is available...")
 				jarPath, err := EnsurePostgresJDBCDriver(h.env.HiveHome, h.env.SparkHome, h.paths.BaseDir)

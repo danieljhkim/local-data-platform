@@ -128,18 +128,27 @@ func (pm *ProfileManager) Apply(profile string) error {
 	}
 
 	dstRoot := pm.paths.CurrentConfDir()
+	srcRoot := filepath.Join(pm.paths.UserProfilesDir(), profile)
 
-	gen := generator.NewConfigGenerator()
-	if !gen.HasProfile(profile) {
-		return fmt.Errorf("unknown profile '%s'", profile)
+	// Check if profile exists in user's profiles directory
+	if !util.DirExists(srcRoot) {
+		return fmt.Errorf("profile '%s' not found in %s (run: local-data profile init)", profile, pm.paths.UserProfilesDir())
 	}
 
 	util.Log("Applying runtime config overlay for profile '%s'", profile)
 	util.Log("  to: %s", dstRoot)
 
-	// Generate config files programmatically
-	if err := gen.Generate(profile, pm.paths.BaseDir, dstRoot); err != nil {
-		return fmt.Errorf("failed to generate config: %w", err)
+	// Remove existing overlay to ensure clean state
+	if util.DirExists(dstRoot) {
+		if err := os.RemoveAll(dstRoot); err != nil {
+			return fmt.Errorf("failed to remove existing overlay: %w", err)
+		}
+	}
+
+	// Copy profile configs from user's profile directory to current overlay
+	// This preserves customizations made during 'profile init'
+	if err := util.CopyDir(srcRoot, dstRoot); err != nil {
+		return fmt.Errorf("failed to copy profile configs: %w", err)
 	}
 
 	// Copy hive-site.xml into Spark conf so PySpark/spark-submit find the metastore
