@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -19,8 +20,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "local-data",
-	Short: "Manage a local Hadoop (HDFS + YARN) + Hive stack",
+	Use:     "local-data",
+	Version: "dev",
+	Short:   "Manage a local Hadoop (HDFS + YARN) + Hive stack",
 	Long: `local-data: manage a local Hadoop (HDFS + YARN) + Hive stack.
 
 A modular CLI to manage HDFS/YARN/Hive/Spark in one place with runtime
@@ -28,6 +30,14 @@ config overlays and profile-based configuration.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	// Run: func(cmd *cobra.Command, args []string) { },
+}
+
+func SetVersion(v string) {
+	if v == "" {
+		return
+	}
+	rootCmd.Version = v
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -46,6 +56,16 @@ func init() {
 	rootCmd.AddCommand(service.NewStopCmd(getPaths))
 	rootCmd.AddCommand(service.NewStatusCmd(getPaths))
 	rootCmd.AddCommand(NewLogsCmd(getPaths))
+
+	// Version command (explicit, for script-friendly `local-data version`)
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print the local-data CLI version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintln(os.Stdout, rootCmd.Version)
+		},
+	})
 
 	// Add wrapper commands
 	rootCmd.AddCommand(wrappers.NewHDFSCmd(getPaths))
