@@ -50,33 +50,50 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	// Add subcommands
-	rootCmd.AddCommand(newInitCmd(getPaths))
-	rootCmd.AddCommand(profile.NewProfileCmd(getPaths))
-	rootCmd.AddCommand(setting.NewSettingCmd(getPaths))
-	rootCmd.AddCommand(env.NewEnvCmd(getPaths))
-	rootCmd.AddCommand(service.NewStartCmd(getPaths))
-	rootCmd.AddCommand(service.NewStopCmd(getPaths))
-	rootCmd.AddCommand(service.NewStatusCmd(getPaths))
-	rootCmd.AddCommand(NewLogsCmd(getPaths))
+	// Define command groups
+	rootCmd.AddGroup(
+		&cobra.Group{ID: "cluster", Title: "Cluster Management:"},
+		&cobra.Group{ID: "platform", Title: "Data Platform Commands:"},
+		&cobra.Group{ID: "config", Title: "Configuration:"},
+		&cobra.Group{ID: "util", Title: "CLI Utilities:"},
+	)
 
-	// Version command (explicit, for script-friendly `local-data version`)
-	rootCmd.AddCommand(&cobra.Command{
+	// Cluster Management
+	addCmdToGroup(rootCmd, newInitCmd(getPaths), "cluster")
+	addCmdToGroup(rootCmd, service.NewStartCmd(getPaths), "cluster")
+	addCmdToGroup(rootCmd, service.NewStopCmd(getPaths), "cluster")
+	addCmdToGroup(rootCmd, service.NewStatusCmd(getPaths), "cluster")
+	addCmdToGroup(rootCmd, NewLogsCmd(getPaths), "cluster")
+
+	// Data Platform Commands
+	addCmdToGroup(rootCmd, wrappers.NewHadoopCmd(getPaths), "platform")
+	addCmdToGroup(rootCmd, wrappers.NewHDFSCmd(getPaths), "platform")
+	addCmdToGroup(rootCmd, wrappers.NewHiveCmd(getPaths), "platform")
+	addCmdToGroup(rootCmd, wrappers.NewPySparkCmd(getPaths), "platform")
+	addCmdToGroup(rootCmd, wrappers.NewSparkSubmitCmd(getPaths), "platform")
+	addCmdToGroup(rootCmd, wrappers.NewYARNCmd(getPaths), "platform")
+
+	// Configuration
+	addCmdToGroup(rootCmd, profile.NewProfileCmd(getPaths), "config")
+	addCmdToGroup(rootCmd, env.NewEnvCmd(getPaths), "config")
+	addCmdToGroup(rootCmd, setting.NewSettingCmd(getPaths), "config")
+
+	// CLI Utilities
+	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the local-data CLI version",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Fprintln(os.Stdout, rootCmd.Version)
 		},
-	})
+	}
+	addCmdToGroup(rootCmd, versionCmd, "util")
+}
 
-	// Add wrapper commands
-	rootCmd.AddCommand(wrappers.NewHDFSCmd(getPaths))
-	rootCmd.AddCommand(wrappers.NewHiveCmd(getPaths))
-	rootCmd.AddCommand(wrappers.NewYARNCmd(getPaths))
-	rootCmd.AddCommand(wrappers.NewHadoopCmd(getPaths))
-	rootCmd.AddCommand(wrappers.NewPySparkCmd(getPaths))
-	rootCmd.AddCommand(wrappers.NewSparkSubmitCmd(getPaths))
+// addCmdToGroup sets the GroupID on a command and adds it to the parent.
+func addCmdToGroup(parent *cobra.Command, cmd *cobra.Command, groupID string) {
+	cmd.GroupID = groupID
+	parent.AddCommand(cmd)
 }
 
 // initConfig reads in config file and ENV variables if set.
