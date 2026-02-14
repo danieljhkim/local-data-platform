@@ -111,17 +111,17 @@ func (dr *DoctorResult) Print() {
 
 	// Print check results
 	for _, check := range dr.Checks {
-		status := "OK  "
+		var status string
 		msg := check.Command
 
-		if !check.Found {
-			if check.Required {
-				status = "FAIL"
-				msg = fmt.Sprintf("%s (required)", check.Command)
-			} else {
-				status = "WARN"
-				msg = fmt.Sprintf("%s (optional)", check.Command)
-			}
+		if check.Found {
+			status = util.Colorf(util.Green, "OK  ")
+		} else if check.Required {
+			status = util.Colorf(util.BoldRed, "FAIL")
+			msg = fmt.Sprintf("%s (required)", check.Command)
+		} else {
+			status = util.Colorf(util.Yellow, "WARN")
+			msg = fmt.Sprintf("%s (optional)", check.Command)
 		}
 
 		fmt.Printf("  %s %s\n", status, msg)
@@ -129,7 +129,7 @@ func (dr *DoctorResult) Print() {
 
 	// Java version warning
 	if dr.JavaMajor != 0 && dr.JavaMajor != 17 {
-		fmt.Printf("  WARN java major version is %d (recommended: 17)\n", dr.JavaMajor)
+		fmt.Printf("  %s java major version is %d (recommended: 17)\n", util.Colorf(util.Yellow, "WARN"), dr.JavaMajor)
 		fmt.Printf("       Fix: install Java 17 and set JAVA_HOME\n")
 	}
 }

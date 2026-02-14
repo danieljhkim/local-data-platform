@@ -122,7 +122,7 @@ func (h *HiveService) startMetastore() error {
 		return fmt.Errorf("failed to start Hive metastore: %w", err)
 	}
 
-	util.Log("Hive metastore started (pid %d).", startedPid)
+	util.Success("Hive metastore started (pid %d).", startedPid)
 	return nil
 }
 
@@ -147,7 +147,7 @@ func (h *HiveService) startHiveServer2() error {
 		return fmt.Errorf("failed to start HiveServer2: %w", err)
 	}
 
-	util.Log("HiveServer2 started (pid %d).", startedPid)
+	util.Success("HiveServer2 started (pid %d).", startedPid)
 	return nil
 }
 
@@ -164,7 +164,7 @@ func (h *HiveService) Stop() error {
 			if err := h.procMgr.Stop(svc); err != nil {
 				util.Warn("Failed to stop Hive %s: %v", svc, err)
 			} else {
-				util.Log("Stopped Hive %s (pid %d).", svc, pid)
+				util.Success("Stopped Hive %s (pid %d).", svc, pid)
 			}
 		}
 
@@ -179,6 +179,15 @@ func (h *HiveService) Stop() error {
 // StopForce performs a force-stop of Hive services
 func (h *HiveService) StopForce() error {
 	return ForceStop(h.procMgr.PidDir)
+}
+
+// ListenerStatus represents the status of a Hive listener port
+type ListenerStatus struct {
+	Label     string // e.g., "metastore", "hiveserver2"
+	Port      int
+	Listening bool
+	PID       string // PID of the listener process (if listening)
+	Cmd       string // Command name (if listening)
 }
 
 // Status returns the status of Hive services
@@ -198,55 +207,49 @@ func (h *HiveService) Status() ([]service.ServiceStatus, error) {
 		statuses = append(statuses, status)
 	}
 
-	// Also show listener status
-	fmt.Println()
-	fmt.Println("listeners:")
-	h.showListenerStatus()
-
 	return statuses, nil
 }
 
-// showListenerStatus shows the status of Hive listeners
-func (h *HiveService) showListenerStatus() {
+// ListenerStatuses returns the listener status for Hive ports
+func (h *HiveService) ListenerStatuses() []ListenerStatus {
 	if _, err := exec.LookPath("lsof"); err != nil {
-		fmt.Println("  WARN: lsof not found; cannot check 9083/10000 listeners")
-		return
+		return []ListenerStatus{
+			{Label: "metastore", Port: 9083},
+			{Label: "hiveserver2", Port: 10000},
+		}
 	}
 
-	h.showListenerLine(9083, "metastore")
-	h.showListenerLine(10000, "hiveserver2")
+	return []ListenerStatus{
+		h.checkListener(9083, "metastore"),
+		h.checkListener(10000, "hiveserver2"),
+	}
 }
 
-// showListenerLine shows listener status for a port
-func (h *HiveService) showListenerLine(port int, label string) {
+// checkListener checks if a port is listening and returns a ListenerStatus
+func (h *HiveService) checkListener(port int, label string) ListenerStatus {
+	ls := ListenerStatus{Label: label, Port: port}
+
 	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN")
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("  %s:%d not listening\n", label, port)
-		return
+		return ls
 	}
 
 	lines := strings.Split(string(output), "\n")
-	found := false
-
-	// Skip header line
 	for i, line := range lines {
 		if i == 0 || line == "" {
 			continue
 		}
-
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
-			cmdName := fields[0]
-			pid := fields[1]
-			fmt.Printf("  %s:%d listening (pid %s, cmd %s)\n", label, port, pid, cmdName)
-			found = true
+			ls.Listening = true
+			ls.PID = fields[1]
+			ls.Cmd = fields[0]
+			return ls
 		}
 	}
 
-	if !found {
-		fmt.Printf("  %s:%d not listening\n", label, port)
-	}
+	return ls
 }
 
 // cleanStaleDerbyLocks removes stale Derby lock files if the metastore uses
@@ -305,7 +308,7 @@ func (h *HiveService) waitForHiveServer2() error {
 		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
 		if err == nil {
 			conn.Close()
-			util.Log("HiveServer2 is ready.")
+			util.Success("HiveServer2 is ready.")
 			return nil
 		}
 

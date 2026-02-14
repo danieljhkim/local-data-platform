@@ -7,6 +7,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/service/hdfs"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 	"github.com/danieljhkim/local-data-platform/internal/service/yarn"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -44,25 +45,25 @@ Examples:
 				// Start services based on profile
 				if profile == "local" {
 					// Local profile: only start Hive (uses local filesystem)
-					fmt.Println("==> start hive (local profile - no HDFS/YARN needed)")
+					util.Section("start hive (local profile - no HDFS/YARN needed)")
 					if err := startHive(paths); err != nil {
 						return err
 					}
 				} else {
 					// HDFS profile: start all services in order
-					fmt.Println("==> start hdfs")
+					util.Section("start hdfs")
 					if err := startHDFS(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> start yarn")
+					util.Section("start yarn")
 					if err := startYARN(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> start hive")
+					util.Section("start hive")
 					if err := startHive(paths); err != nil {
 						return err
 					}

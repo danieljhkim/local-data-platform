@@ -83,7 +83,7 @@ func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
-	util.Log("Profiles initialized successfully")
+	util.Success("Profiles initialized successfully")
 	util.Log("  Runtime config overlay: %s", pm.paths.CurrentConfDir())
 
 	return nil

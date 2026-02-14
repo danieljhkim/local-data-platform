@@ -96,7 +96,7 @@ func (y *YARNService) startResourceManager() error {
 		return fmt.Errorf("failed to start ResourceManager: %w", err)
 	}
 
-	util.Log("YARN ResourceManager started (pid %d).", startedPid)
+	util.Success("YARN ResourceManager started (pid %d).", startedPid)
 	return nil
 }
 
@@ -130,7 +130,7 @@ func (y *YARNService) startNodeManager() error {
 		return fmt.Errorf("failed to start NodeManager: %w", err)
 	}
 
-	util.Log("YARN NodeManager started (pid %d).", startedPid)
+	util.Success("YARN NodeManager started (pid %d).", startedPid)
 	return nil
 }
 
@@ -154,7 +154,7 @@ func (y *YARNService) Stop() error {
 			if err := y.procMgr.Stop(svc.name); err != nil {
 				util.Warn("Failed to stop YARN %s via PID file: %v", svc.name, err)
 			} else {
-				util.Log("Stopped YARN %s (pid %d).", svc.name, pid)
+				util.Success("Stopped YARN %s (pid %d).", svc.name, pid)
 				continue
 			}
 		}
@@ -165,7 +165,7 @@ func (y *YARNService) Stop() error {
 			if err := killProcess(jpsPid); err != nil {
 				util.Warn("Failed to stop YARN %s via jps: %v", svc.name, err)
 			} else {
-				util.Log("Stopped YARN %s (pid %d) via jps.", svc.name, jpsPid)
+				util.Success("Stopped YARN %s (pid %d) via jps.", svc.name, jpsPid)
 			}
 		}
 

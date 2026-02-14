@@ -86,7 +86,7 @@ func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
 	// Check for success message
 	if strings.Contains(output, "Initialization script completed") ||
 		strings.Contains(output, "schemaTool completed") {
-		util.Log("Metastore schema initialized successfully")
+		util.Success("Metastore schema initialized successfully")
 		return nil
 	}
 

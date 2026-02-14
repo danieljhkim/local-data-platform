@@ -70,7 +70,7 @@ func stopViaPidFiles(pidDir string) {
 
 		if isProcessRunning(pid) {
 			killProcess(pid)
-			util.Log("Stopped Hive %s (pid %d).", svc, pid)
+			util.Success("Stopped Hive %s (pid %d).", svc, pid)
 		}
 
 		os.Remove(pidFile)

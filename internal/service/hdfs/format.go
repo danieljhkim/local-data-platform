@@ -78,7 +78,7 @@ func EnsureNameNodeFormatted(hadoopConfDir string) error {
 				return fmt.Errorf("NameNode format completed but VERSION file not created: %s\n"+
 					"  This may indicate HADOOP_CONF_DIR is not set correctly or Hadoop installation is corrupted", versionFile)
 			}
-			util.Log("NameNode formatted successfully")
+			util.Success("NameNode formatted successfully")
 			continue
 		}
 

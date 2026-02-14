@@ -7,6 +7,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/service/hdfs"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 	"github.com/danieljhkim/local-data-platform/internal/service/yarn"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -44,25 +45,25 @@ Examples:
 				// Stop services based on profile
 				if profile == "local" {
 					// Local profile: only stop Hive
-					fmt.Println("==> stop hive (local profile)")
+					util.Section("stop hive (local profile)")
 					if err := stopHive(paths); err != nil {
 						return err
 					}
 				} else {
 					// HDFS profile: stop all services in reverse order
-					fmt.Println("==> stop hive")
+					util.Section("stop hive")
 					if err := stopHive(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> stop yarn")
+					util.Section("stop yarn")
 					if err := stopYARN(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> stop hdfs")
+					util.Section("stop hdfs")
 					if err := stopHDFS(paths); err != nil {
 						return err
 					}

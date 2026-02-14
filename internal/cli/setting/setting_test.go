@@ -32,19 +32,19 @@ func TestSettingList_PrintsAllConfigurableKeys(t *testing.T) {
 		t.Fatalf("setting list returned error: %v", err)
 	}
 
-	if !strings.Contains(out, "user=") {
+	if !strings.Contains(out, "- user: ") {
 		t.Fatalf("output missing user key:\n%s", out)
 	}
-	if !strings.Contains(out, "base-dir=") {
+	if !strings.Contains(out, "- base-dir: ") {
 		t.Fatalf("output missing base-dir key:\n%s", out)
 	}
-	if !strings.Contains(out, "db-type=") {
+	if !strings.Contains(out, "- db-type: ") {
 		t.Fatalf("output missing db-type key:\n%s", out)
 	}
-	if !strings.Contains(out, "db-url=") {
+	if !strings.Contains(out, "- db-url: ") {
 		t.Fatalf("output missing db-url key:\n%s", out)
 	}
-	if !strings.Contains(out, "db-password=********") {
+	if !strings.Contains(out, "- db-password: ********") {
 		t.Fatalf("output should mask db-password:\n%s", out)
 	}
 }

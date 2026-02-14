@@ -2,11 +2,14 @@ package service
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	svc "github.com/danieljhkim/local-data-platform/internal/service"
 	"github.com/danieljhkim/local-data-platform/internal/service/hdfs"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 	"github.com/danieljhkim/local-data-platform/internal/service/yarn"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -44,25 +47,25 @@ Examples:
 				// Show services based on profile
 				if profile == "local" {
 					// Local profile: only show Hive
-					fmt.Println("==> hive (local profile)")
+					util.Section("hive (local profile)")
 					if err := statusHive(paths); err != nil {
 						return err
 					}
 				} else {
 					// HDFS profile: show all services
-					fmt.Println("==> hdfs")
+					util.Section("hdfs")
 					if err := statusHDFS(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> yarn")
+					util.Section("yarn")
 					if err := statusYARN(paths); err != nil {
 						return err
 					}
 
 					fmt.Println()
-					fmt.Println("==> hive")
+					util.Section("hive")
 					if err := statusHive(paths); err != nil {
 						return err
 					}
@@ -88,68 +91,83 @@ Examples:
 	return cmd
 }
 
+// statusRows converts ServiceStatus slices into table rows.
+func statusRows(statuses []svc.ServiceStatus) []util.StatusTableRow {
+	rows := make([]util.StatusTableRow, 0, len(statuses))
+	for _, s := range statuses {
+		row := util.StatusTableRow{Name: s.Name}
+		if s.Running {
+			row.Status = "running"
+			row.Detail = "pid " + strconv.Itoa(s.PID)
+			row.Ok = true
+		} else {
+			row.Status = "stopped"
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 func statusHDFS(paths *config.Paths) error {
-	svc, err := hdfs.NewHDFSService(paths)
+	service, err := hdfs.NewHDFSService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create HDFS service: %w", err)
 	}
 
-	statuses, err := svc.Status()
+	statuses, err := service.Status()
 	if err != nil {
 		return err
 	}
 
-	for _, status := range statuses {
-		if status.Running {
-			fmt.Printf("%s: running (pid %d)\n", status.Name, status.PID)
-		} else {
-			fmt.Printf("%s: stopped\n", status.Name)
-		}
-	}
-
+	util.StatusTable(statusRows(statuses))
 	return nil
 }
 
 func statusYARN(paths *config.Paths) error {
-	svc, err := yarn.NewYARNService(paths)
+	service, err := yarn.NewYARNService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create YARN service: %w", err)
 	}
 
-	statuses, err := svc.Status()
+	statuses, err := service.Status()
 	if err != nil {
 		return err
 	}
 
-	for _, status := range statuses {
-		if status.Running {
-			fmt.Printf("%s: running (pid %d)\n", status.Name, status.PID)
-		} else {
-			fmt.Printf("%s: stopped\n", status.Name)
-		}
-	}
-
+	util.StatusTable(statusRows(statuses))
 	return nil
 }
 
 func statusHive(paths *config.Paths) error {
-	svc, err := hive.NewHiveService(paths)
+	service, err := hive.NewHiveService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create Hive service: %w", err)
 	}
 
-	statuses, err := svc.Status()
+	statuses, err := service.Status()
 	if err != nil {
 		return err
 	}
 
-	for _, status := range statuses {
-		if status.Running {
-			fmt.Printf("%s: running (pid %d)\n", status.Name, status.PID)
-		} else {
-			fmt.Printf("%s: stopped\n", status.Name)
+	// Build process rows
+	rows := statusRows(statuses)
+
+	// Build listener rows
+	listeners := service.ListenerStatuses()
+	for _, ls := range listeners {
+		row := util.StatusTableRow{
+			Name: fmt.Sprintf("%s:%d", ls.Label, ls.Port),
 		}
+		if ls.Listening {
+			row.Status = "listening"
+			row.Detail = fmt.Sprintf("pid %s, cmd %s", ls.PID, ls.Cmd)
+			row.Ok = true
+		} else {
+			row.Status = "not listening"
+		}
+		rows = append(rows, row)
 	}
 
+	util.StatusTable(rows)
 	return nil
 }

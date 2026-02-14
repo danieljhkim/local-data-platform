@@ -7,6 +7,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/service/hdfs"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 	"github.com/danieljhkim/local-data-platform/internal/service/yarn"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -22,9 +23,7 @@ This command tails the last 120 lines from each service's log files.`,
 			paths := pathsGetter()
 
 			// Show HDFS logs
-			fmt.Println("====================")
-			fmt.Println("==> HDFS Logs")
-			fmt.Println("====================")
+			util.Section("HDFS Logs")
 			hdfsSvc, err := hdfs.NewHDFSService(paths)
 			if err != nil {
 				fmt.Printf("Error creating HDFS service: %v\n", err)
@@ -35,9 +34,7 @@ This command tails the last 120 lines from each service's log files.`,
 			}
 
 			// Show YARN logs
-			fmt.Println("====================")
-			fmt.Println("==> YARN Logs")
-			fmt.Println("====================")
+			util.Section("YARN Logs")
 			yarnSvc, err := yarn.NewYARNService(paths)
 			if err != nil {
 				fmt.Printf("Error creating YARN service: %v\n", err)
@@ -48,9 +45,7 @@ This command tails the last 120 lines from each service's log files.`,
 			}
 
 			// Show Hive logs
-			fmt.Println("====================")
-			fmt.Println("==> Hive Logs")
-			fmt.Println("====================")
+			util.Section("Hive Logs")
 			hiveSvc, err := hive.NewHiveService(paths)
 			if err != nil {
 				fmt.Printf("Error creating Hive service: %v\n", err)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/cli/env"
 	"github.com/danieljhkim/local-data-platform/internal/cli/profile"
@@ -11,6 +12,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/cli/setting"
 	"github.com/danieljhkim/local-data-platform/internal/cli/wrappers"
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -47,8 +49,40 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// colorizeHelp applies color to section headers in Cobra help output.
+// Headers like "Usage:", "Cluster Management:", "Flags:" are bolded/colored.
+func colorizeHelp(s string) string {
+	if !util.StdoutColorEnabled() {
+		return s
+	}
+
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Section headers end with ":" and have no leading whitespace (or are group titles)
+		if trimmed == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") {
+			lines[i] = util.Colorf(util.BoldCyan, "%s", line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
+
+	// Custom help function to colorize section headers
+	defaultHelp := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		// Capture the default help output
+		buf := new(strings.Builder)
+		cmd.SetOut(buf)
+		defaultHelp(cmd, args)
+		cmd.SetOut(os.Stdout)
+		fmt.Print(colorizeHelp(buf.String()))
+	})
 
 	// Define command groups
 	rootCmd.AddGroup(

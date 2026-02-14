@@ -143,7 +143,7 @@ func (h *HDFSService) startNameNode() error {
 		return fmt.Errorf("failed to start NameNode: %w", err)
 	}
 
-	util.Log("HDFS NameNode started (pid %d).", pid)
+	util.Success("HDFS NameNode started (pid %d).", pid)
 	return nil
 }
 
@@ -185,7 +185,7 @@ func (h *HDFSService) startDataNode() error {
 		return fmt.Errorf("failed to start DataNode: %w", err)
 	}
 
-	util.Log("HDFS DataNode started (pid %d).", pid)
+	util.Success("HDFS DataNode started (pid %d).", pid)
 	return nil
 }
 
@@ -201,7 +201,7 @@ func (h *HDFSService) Stop() error {
 		} else {
 			pid, _ := h.procMgr.Status(svc)
 			if pid == 0 {
-				util.Log("Stopped HDFS %s.", svc)
+				util.Success("Stopped HDFS %s.", svc)
 			}
 		}
 
@@ -217,7 +217,7 @@ func (h *HDFSService) Stop() error {
 			proc, err := os.FindProcess(pid)
 			if err == nil {
 				proc.Kill()
-				util.Log("Stopped HDFS %s (pid %d).", svc, pid)
+				util.Success("Stopped HDFS %s (pid %d).", svc, pid)
 			}
 		}
 	}
