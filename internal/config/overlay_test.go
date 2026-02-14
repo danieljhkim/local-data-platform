@@ -158,6 +158,153 @@ func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
 	}
 }
 
+func TestProfileManager_Init_UsesPersistedSettingsWhenOptionsOmitted(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+
+	paths := NewPaths(repoRoot, baseDir)
+	pm := NewProfileManager(paths)
+	sm := NewSettingsManager(paths)
+
+	if err := sm.Save(&Settings{
+		User:       "persisted-user",
+		BaseDir:    baseDir,
+		DBURL:      "jdbc:postgresql://persisted-host:5432/persisted_db",
+		DBPassword: "persisted_password",
+	}); err != nil {
+		t.Fatalf("Failed to save settings: %v", err)
+	}
+
+	if err := pm.Init(false, nil); err != nil {
+		t.Fatalf("Failed to init profiles: %v", err)
+	}
+
+	profileHiveConfig := filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml")
+	content, err := os.ReadFile(profileHiveConfig)
+	if err != nil {
+		t.Fatalf("Failed to read profile hive-site.xml: %v", err)
+	}
+
+	xml := string(content)
+	if !strings.Contains(xml, "jdbc:postgresql://persisted-host:5432/persisted_db") {
+		t.Errorf("Expected persisted DB URL in generated config")
+	}
+	if !strings.Contains(xml, "persisted_password") {
+		t.Errorf("Expected persisted DB password in generated config")
+	}
+	if !strings.Contains(xml, "persisted-user") {
+		t.Errorf("Expected persisted user in generated config")
+	}
+}
+
+func TestProfileManager_Init_CLIOptionsOverridePersistedSettings(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+
+	paths := NewPaths(repoRoot, baseDir)
+	pm := NewProfileManager(paths)
+	sm := NewSettingsManager(paths)
+
+	if err := sm.Save(&Settings{
+		User:       "persisted-user",
+		BaseDir:    baseDir,
+		DBURL:      "jdbc:postgresql://persisted-host:5432/persisted_db",
+		DBPassword: "persisted_password",
+	}); err != nil {
+		t.Fatalf("Failed to save settings: %v", err)
+	}
+
+	opts := &generator.InitOptions{
+		User:       "cli-user",
+		DBUrl:      "jdbc:postgresql://cli-host:5432/cli_db",
+		DBPassword: "cli_password",
+	}
+
+	if err := pm.Init(false, opts); err != nil {
+		t.Fatalf("Failed to init profiles: %v", err)
+	}
+
+	profileHiveConfig := filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml")
+	content, err := os.ReadFile(profileHiveConfig)
+	if err != nil {
+		t.Fatalf("Failed to read profile hive-site.xml: %v", err)
+	}
+
+	xml := string(content)
+	if !strings.Contains(xml, "jdbc:postgresql://cli-host:5432/cli_db") {
+		t.Errorf("Expected CLI DB URL in generated config")
+	}
+	if !strings.Contains(xml, "cli_password") {
+		t.Errorf("Expected CLI DB password in generated config")
+	}
+	if !strings.Contains(xml, "cli-user") {
+		t.Errorf("Expected CLI user in generated config")
+	}
+
+	settings, err := sm.Load()
+	if err != nil {
+		t.Fatalf("Failed to load settings: %v", err)
+	}
+
+	if settings.User != "cli-user" {
+		t.Errorf("Settings User = %q, want %q", settings.User, "cli-user")
+	}
+	if settings.DBURL != "jdbc:postgresql://cli-host:5432/cli_db" {
+		t.Errorf("Settings DBURL = %q", settings.DBURL)
+	}
+	if settings.DBPassword != "cli_password" {
+		t.Errorf("Settings DBPassword = %q", settings.DBPassword)
+	}
+	if settings.BaseDir != baseDir {
+		t.Errorf("Settings BaseDir = %q, want %q", settings.BaseDir, baseDir)
+	}
+}
+
+func TestProfileManager_InitWithoutForceSyncsSettingsToExistingProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+
+	paths := NewPaths(repoRoot, baseDir)
+	pm := NewProfileManager(paths)
+
+	first := &generator.InitOptions{
+		User:       "daniel",
+		DBUrl:      "jdbc:postgresql://localhost:5432/metastore2",
+		DBPassword: "password2",
+	}
+	if err := pm.Init(false, first); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	second := &generator.InitOptions{
+		User:       "daniel",
+		DBUrl:      "jdbc:postgresql://localhost:5432/metastore",
+		DBPassword: "password",
+	}
+	if err := pm.Init(false, second); err != nil {
+		t.Fatalf("second init without force: %v", err)
+	}
+
+	hiveConfig := filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml")
+	content, err := os.ReadFile(hiveConfig)
+	if err != nil {
+		t.Fatalf("read hive-site: %v", err)
+	}
+	xml := string(content)
+	if !strings.Contains(xml, "jdbc:postgresql://localhost:5432/metastore") {
+		t.Fatalf("expected synced db-url in existing profile, got:\n%s", xml)
+	}
+	if strings.Contains(xml, "jdbc:postgresql://localhost:5432/metastore2") {
+		t.Fatalf("stale db-url remained in existing profile")
+	}
+	if !strings.Contains(xml, "<value>password</value>") {
+		t.Fatalf("expected synced db-password in existing profile")
+	}
+}
+
 func TestProfileManager_List(t *testing.T) {
 	tests := []struct {
 		name             string

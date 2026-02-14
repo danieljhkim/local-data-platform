@@ -32,10 +32,6 @@ func NewPaths(repoRoot, baseDir string) *Paths {
 // DefaultBaseDir returns the default base directory
 // Mirrors ld_default_base_dir: ${BASE_DIR:-$HOME/local-data-platform}
 func DefaultBaseDir() string {
-	if baseDir := os.Getenv("BASE_DIR"); baseDir != "" {
-		return baseDir
-	}
-
 	home := os.Getenv("HOME")
 	if home == "" {
 		// Fallback to user.Current if HOME not set
@@ -51,6 +47,16 @@ func DefaultBaseDir() string {
 // Mirrors ld_state_dir
 func (p *Paths) StateDir() string {
 	return filepath.Join(p.BaseDir, "state")
+}
+
+// SettingsDir returns the settings directory: $BASE_DIR/settings
+func (p *Paths) SettingsDir() string {
+	return filepath.Join(p.BaseDir, "settings")
+}
+
+// SettingsFile returns the settings file path: $BASE_DIR/settings/setting.json
+func (p *Paths) SettingsFile() string {
+	return filepath.Join(p.SettingsDir(), "setting.json")
 }
 
 // ConfRootDir returns the configuration root directory: $BASE_DIR/conf

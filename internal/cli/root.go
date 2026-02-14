@@ -8,6 +8,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/cli/env"
 	"github.com/danieljhkim/local-data-platform/internal/cli/profile"
 	"github.com/danieljhkim/local-data-platform/internal/cli/service"
+	"github.com/danieljhkim/local-data-platform/internal/cli/setting"
 	"github.com/danieljhkim/local-data-platform/internal/cli/wrappers"
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/spf13/cobra"
@@ -51,6 +52,7 @@ func init() {
 
 	// Add subcommands
 	rootCmd.AddCommand(profile.NewProfileCmd(getPaths))
+	rootCmd.AddCommand(setting.NewSettingCmd(getPaths))
 	rootCmd.AddCommand(env.NewEnvCmd(getPaths))
 	rootCmd.AddCommand(service.NewStartCmd(getPaths))
 	rootCmd.AddCommand(service.NewStopCmd(getPaths))

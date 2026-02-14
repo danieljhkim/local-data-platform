@@ -30,6 +30,12 @@ func (pm *ProfileManager) IsInitialized() bool {
 // Init initializes profiles using the Go struct generator
 func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 	dst := pm.paths.UserProfilesDir()
+	sm := NewSettingsManager(pm.paths)
+
+	effectiveOpts, settingsToPersist, err := pm.resolveInitOptions(sm, opts)
+	if err != nil {
+		return err
+	}
 
 	// Check if destination already exists
 	if util.DirExists(dst) {
@@ -41,6 +47,20 @@ func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 		} else {
 			util.Log("Profiles already initialized: %s", dst)
 			util.Log("  (use: local-data profile init --force to overwrite)")
+			// Keep existing files, but sync mutable settings into generated Hive XML.
+			applier := NewSettingsApplier(pm.paths)
+			if err := applier.Apply("user", "", effectiveOpts.User); err != nil {
+				return fmt.Errorf("failed to sync user setting: %w", err)
+			}
+			if err := applier.Apply("db-url", "", effectiveOpts.DBUrl); err != nil {
+				return fmt.Errorf("failed to sync db-url setting: %w", err)
+			}
+			if err := applier.Apply("db-password", "", effectiveOpts.DBPassword); err != nil {
+				return fmt.Errorf("failed to sync db-password setting: %w", err)
+			}
+			if err := sm.Save(settingsToPersist); err != nil {
+				return fmt.Errorf("failed to save settings: %w", err)
+			}
 			return nil
 		}
 	}
@@ -53,14 +73,52 @@ func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 	util.Log("Generating profiles under: %s", dst)
 
 	gen := generator.NewConfigGenerator()
-	if err := gen.InitProfiles(pm.paths.BaseDir, dst, opts); err != nil {
+	if err := gen.InitProfiles(pm.paths.BaseDir, dst, effectiveOpts); err != nil {
 		return fmt.Errorf("failed to generate profiles: %w", err)
+	}
+
+	if err := sm.Save(settingsToPersist); err != nil {
+		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
 	util.Log("Profiles initialized successfully")
 	util.Log("  Runtime config overlay: %s", pm.paths.CurrentConfDir())
 
 	return nil
+}
+
+func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generator.InitOptions) (*generator.InitOptions, *Settings, error) {
+	settings, err := sm.LoadOrDefault()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load settings: %w", err)
+	}
+
+	effective := &generator.InitOptions{
+		User:       settings.User,
+		DBUrl:      settings.DBURL,
+		DBPassword: settings.DBPassword,
+	}
+
+	if opts != nil {
+		if opts.User != "" {
+			effective.User = opts.User
+		}
+		if opts.DBUrl != "" {
+			effective.DBUrl = opts.DBUrl
+		}
+		if opts.DBPassword != "" {
+			effective.DBPassword = opts.DBPassword
+		}
+	}
+
+	persisted := &Settings{
+		User:       effective.User,
+		BaseDir:    pm.paths.BaseDir,
+		DBURL:      effective.DBUrl,
+		DBPassword: effective.DBPassword,
+	}
+
+	return effective, persisted, nil
 }
 
 // List returns a sorted list of available profile names

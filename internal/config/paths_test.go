@@ -60,6 +60,32 @@ func TestPaths_StateDir(t *testing.T) {
 	}
 }
 
+func TestPaths_SettingsDir(t *testing.T) {
+	repoRoot := "/test/repo"
+	baseDir := "/test/base"
+	paths := NewPaths(repoRoot, baseDir)
+
+	expected := filepath.Join(baseDir, "settings")
+	result := paths.SettingsDir()
+
+	if result != expected {
+		t.Errorf("SettingsDir() = %v, want %v", result, expected)
+	}
+}
+
+func TestPaths_SettingsFile(t *testing.T) {
+	repoRoot := "/test/repo"
+	baseDir := "/test/base"
+	paths := NewPaths(repoRoot, baseDir)
+
+	expected := filepath.Join(baseDir, "settings", "setting.json")
+	result := paths.SettingsFile()
+
+	if result != expected {
+		t.Errorf("SettingsFile() = %v, want %v", result, expected)
+	}
+}
+
 func TestPaths_ActiveProfileFile(t *testing.T) {
 	repoRoot := "/test/repo"
 	baseDir := "/test/base"
@@ -74,7 +100,6 @@ func TestPaths_ActiveProfileFile(t *testing.T) {
 }
 
 func TestDefaultBaseDir(t *testing.T) {
-	// Test with BASE_DIR environment variable
 	oldBaseDir := os.Getenv("BASE_DIR")
 	defer func() {
 		if oldBaseDir != "" {
@@ -84,13 +109,15 @@ func TestDefaultBaseDir(t *testing.T) {
 		}
 	}()
 
-	t.Run("with BASE_DIR env", func(t *testing.T) {
+	t.Run("ignores BASE_DIR env", func(t *testing.T) {
 		testDir := "/custom/base/dir"
 		os.Setenv("BASE_DIR", testDir)
 
 		result := DefaultBaseDir()
-		if result != testDir {
-			t.Errorf("DefaultBaseDir() = %v, want %v", result, testDir)
+		homeDir, _ := os.UserHomeDir()
+		expected := filepath.Join(homeDir, "local-data-platform")
+		if result != expected {
+			t.Errorf("DefaultBaseDir() = %v, want %v", result, expected)
 		}
 	})
 
