@@ -27,7 +27,7 @@ Examples:
 
 			// Check if profiles have been initialized
 			if !pm.IsInitialized() {
-				return fmt.Errorf("profiles have not been initialized\n\nRun: local-data profile init")
+				return fmt.Errorf("profiles have not been initialized\n\nRun: local-data init")
 			}
 
 			// Check if the profile is valid

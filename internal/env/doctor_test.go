@@ -107,7 +107,7 @@ func TestRunDoctor_StartHive(t *testing.T) {
 
 func TestRunDoctor_ProfileCommands(t *testing.T) {
 	tests := []string{
-		"profile init",
+		"init",
 		"profile set",
 		"profile list",
 		"profile check",

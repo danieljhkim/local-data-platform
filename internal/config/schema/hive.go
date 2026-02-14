@@ -9,6 +9,7 @@ type HiveConfig struct {
 	ConnectionDriverName string // javax.jdo.option.ConnectionDriverName
 	ConnectionUserName   string // javax.jdo.option.ConnectionUserName (templated)
 	ConnectionPassword   string // javax.jdo.option.ConnectionPassword
+	MetastoreURIs        string // hive.metastore.uris (for HS2 -> metastore service)
 
 	// Warehouse
 	WarehouseDir string // hive.metastore.warehouse.dir
@@ -44,6 +45,7 @@ func (c *HiveConfig) ToProperties(ctx *TemplateContext) []Property {
 		{Name: "javax.jdo.option.ConnectionDriverName", Value: c.ConnectionDriverName},
 		{Name: "javax.jdo.option.ConnectionUserName", Value: ctx.Substitute(c.ConnectionUserName)},
 		{Name: "javax.jdo.option.ConnectionPassword", Value: c.ConnectionPassword},
+		{Name: "hive.metastore.uris", Value: c.MetastoreURIs},
 
 		// Warehouse
 		{Name: "hive.metastore.warehouse.dir", Value: ctx.Substitute(c.WarehouseDir)},

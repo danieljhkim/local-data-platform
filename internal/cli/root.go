@@ -51,6 +51,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Add subcommands
+	rootCmd.AddCommand(newInitCmd(getPaths))
 	rootCmd.AddCommand(profile.NewProfileCmd(getPaths))
 	rootCmd.AddCommand(setting.NewSettingCmd(getPaths))
 	rootCmd.AddCommand(env.NewEnvCmd(getPaths))

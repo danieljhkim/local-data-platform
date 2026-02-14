@@ -116,6 +116,7 @@ func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
 	customDBPassword := "mypassword"
 
 	opts := &generator.InitOptions{
+		DBType:     "postgres",
 		DBUrl:      customDBUrl,
 		DBPassword: customDBPassword,
 	}
@@ -137,6 +138,12 @@ func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
 	if !strings.Contains(string(content), customDBPassword) {
 		t.Errorf("Profile hive-site.xml should contain custom DB password")
 	}
+	if !strings.Contains(string(content), "thrift://localhost:9083") {
+		t.Errorf("Profile hive-site.xml should contain hive.metastore.uris")
+	}
+	if !strings.Contains(string(content), "hive.metastore.event.db.notification.api.auth") || !strings.Contains(string(content), "<value>false</value>") {
+		t.Errorf("Profile hive-site.xml should disable metastore event notification API auth for local startup")
+	}
 
 	// Now set the profile (this should preserve the custom values)
 	if err := pm.Set("hdfs"); err != nil {
@@ -155,6 +162,12 @@ func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
 	}
 	if !strings.Contains(string(currentContent), customDBPassword) {
 		t.Errorf("Current hive-site.xml should contain custom DB password\nContent: %s", string(currentContent))
+	}
+	if !strings.Contains(string(currentContent), "thrift://localhost:9083") {
+		t.Errorf("Current hive-site.xml should contain hive.metastore.uris\nContent: %s", string(currentContent))
+	}
+	if !strings.Contains(string(currentContent), "hive.metastore.event.db.notification.api.auth") || !strings.Contains(string(currentContent), "<value>false</value>") {
+		t.Errorf("Current hive-site.xml should disable metastore event notification API auth for local startup\nContent: %s", string(currentContent))
 	}
 }
 
@@ -218,6 +231,7 @@ func TestProfileManager_Init_CLIOptionsOverridePersistedSettings(t *testing.T) {
 
 	opts := &generator.InitOptions{
 		User:       "cli-user",
+		DBType:     "postgres",
 		DBUrl:      "jdbc:postgresql://cli-host:5432/cli_db",
 		DBPassword: "cli_password",
 	}
@@ -272,6 +286,7 @@ func TestProfileManager_InitWithoutForceSyncsSettingsToExistingProfiles(t *testi
 
 	first := &generator.InitOptions{
 		User:       "daniel",
+		DBType:     "postgres",
 		DBUrl:      "jdbc:postgresql://localhost:5432/metastore2",
 		DBPassword: "password2",
 	}
@@ -281,6 +296,7 @@ func TestProfileManager_InitWithoutForceSyncsSettingsToExistingProfiles(t *testi
 
 	second := &generator.InitOptions{
 		User:       "daniel",
+		DBType:     "postgres",
 		DBUrl:      "jdbc:postgresql://localhost:5432/metastore",
 		DBPassword: "password",
 	}

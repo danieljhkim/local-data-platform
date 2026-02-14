@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/danieljhkim/local-data-platform/internal/config/generator"
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -47,6 +48,9 @@ func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 		} else {
 			// Keep existing files, but sync mutable settings into generated Hive XML.
 			applier := NewSettingsApplier(pm.paths)
+			if err := applier.Apply("db-type", "", effectiveOpts.DBType); err != nil {
+				return fmt.Errorf("failed to sync db-type setting: %w", err)
+			}
 			if err := applier.Apply("user", "", effectiveOpts.User); err != nil {
 				return fmt.Errorf("failed to sync user setting: %w", err)
 			}
@@ -93,6 +97,7 @@ func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generato
 
 	effective := &generator.InitOptions{
 		User:       settings.User,
+		DBType:     settings.DBType,
 		DBUrl:      settings.DBURL,
 		DBPassword: settings.DBPassword,
 	}
@@ -100,6 +105,9 @@ func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generato
 	if opts != nil {
 		if opts.User != "" {
 			effective.User = opts.User
+		}
+		if opts.DBType != "" {
+			effective.DBType = opts.DBType
 		}
 		if opts.DBUrl != "" {
 			effective.DBUrl = opts.DBUrl
@@ -109,9 +117,19 @@ func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generato
 		}
 	}
 
+	dbType, err := metastore.NormalizeDBType(effective.DBType)
+	if err != nil {
+		return nil, nil, err
+	}
+	effective.DBType = string(dbType)
+	if err := metastore.ValidateURL(dbType, effective.DBUrl); err != nil {
+		return nil, nil, err
+	}
+
 	persisted := &Settings{
 		User:       effective.User,
 		BaseDir:    pm.paths.BaseDir,
+		DBType:     effective.DBType,
 		DBURL:      effective.DBUrl,
 		DBPassword: effective.DBPassword,
 	}
@@ -124,7 +142,7 @@ func (pm *ProfileManager) List() ([]string, error) {
 	pdir := pm.paths.UserProfilesDir()
 
 	if !util.DirExists(pdir) {
-		return nil, fmt.Errorf("profiles not initialized. Run: local-data profile init")
+		return nil, fmt.Errorf("profiles not initialized. Run: local-data init")
 	}
 
 	// Read directory entries
@@ -188,7 +206,7 @@ func (pm *ProfileManager) Apply(profile string) error {
 
 	// Check if profile exists in user's profiles directory
 	if !util.DirExists(srcRoot) {
-		return fmt.Errorf("profile '%s' not found in %s (run: local-data profile init)", profile, pm.paths.UserProfilesDir())
+		return fmt.Errorf("profile '%s' not found in %s (run: local-data init)", profile, pm.paths.UserProfilesDir())
 	}
 
 	util.Log("Applying runtime config overlay for profile '%s'", profile)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -20,12 +21,38 @@ func NewSettingsApplier(paths *Paths) *SettingsApplier {
 // Apply propagates a setting change to relevant generated config files.
 func (a *SettingsApplier) Apply(key, oldValue, newValue string) error {
 	switch key {
+	case "db-type":
+		sm := NewSettingsManager(a.paths)
+		settings, err := sm.LoadOrDefault()
+		if err != nil {
+			return err
+		}
+		dbType, err := metastore.NormalizeDBType(settings.DBType)
+		if err != nil {
+			return err
+		}
+		if err := a.updateHiveProperty("javax.jdo.option.ConnectionDriverName", metastore.DriverClass(dbType)); err != nil {
+			return err
+		}
+		if err := a.updateHiveProperty("javax.jdo.option.ConnectionURL", settings.DBURL); err != nil {
+			return err
+		}
+		return a.updateHiveProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, settings.User))
 	case "db-url":
 		return a.updateHiveProperty("javax.jdo.option.ConnectionURL", newValue)
 	case "db-password":
 		return a.updateHiveProperty("javax.jdo.option.ConnectionPassword", newValue)
 	case "user":
-		return a.updateHiveProperty("javax.jdo.option.ConnectionUserName", newValue)
+		sm := NewSettingsManager(a.paths)
+		settings, err := sm.LoadOrDefault()
+		if err != nil {
+			return err
+		}
+		dbType, err := metastore.NormalizeDBType(settings.DBType)
+		if err != nil {
+			return err
+		}
+		return a.updateHiveProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, newValue))
 	case "base-dir":
 		// Base dir is forward-only and applies on future generation.
 		return nil

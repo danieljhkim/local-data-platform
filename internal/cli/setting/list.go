@@ -23,6 +23,7 @@ func newListCmd(pathsGetter PathsGetter) *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "user=%s\n", settings.User)
 			fmt.Fprintf(out, "base-dir=%s\n", settings.BaseDir)
+			fmt.Fprintf(out, "db-type=%s\n", settings.DBType)
 			fmt.Fprintf(out, "db-url=%s\n", settings.DBURL)
 			fmt.Fprintf(out, "db-password=%s\n", maskedPassword(settings.DBPassword))
 			return nil

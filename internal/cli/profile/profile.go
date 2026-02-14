@@ -19,7 +19,6 @@ Profiles allow you to switch between different configurations (e.g., 'local' vs 
 	}
 
 	// Add subcommands
-	cmd.AddCommand(newInitCmd(pathsGetter))
 	cmd.AddCommand(newListCmd(pathsGetter))
 	cmd.AddCommand(newSetCmd(pathsGetter))
 	cmd.AddCommand(newCheckCmd(pathsGetter))

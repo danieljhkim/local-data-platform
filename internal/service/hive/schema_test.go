@@ -39,7 +39,11 @@ func TestHiveService_IsPostgresMetastore(t *testing.T) {
   </property>
   <property>
     <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    <value>org.apache.derby.iapi.jdbc.AutoloadedDriver</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>APP</value>
   </property>
 </configuration>`,
 			expected: false,
@@ -122,7 +126,11 @@ func TestHiveService_EnsureMetastoreSchema_NotPostgres(t *testing.T) {
   </property>
   <property>
     <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    <value>org.apache.derby.iapi.jdbc.AutoloadedDriver</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>APP</value>
   </property>
 </configuration>`
 	overlayHiveDir := filepath.Join(baseDir, "conf", "current", "hive")

@@ -6,17 +6,17 @@ import (
 	"os"
 	"os/user"
 	"strings"
+
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 )
 
-const (
-	defaultDBURL      = "jdbc:postgresql://localhost:5432/metastore"
-	defaultDBPassword = "password"
-)
+const defaultDBPassword = "password"
 
 // Settings holds persisted user-configurable settings.
 type Settings struct {
 	User       string `json:"user"`
 	BaseDir    string `json:"base-dir"`
+	DBType     string `json:"db-type"`
 	DBURL      string `json:"db-url"`
 	DBPassword string `json:"db-password"`
 }
@@ -47,6 +47,9 @@ func (sm *SettingsManager) Load() (*Settings, error) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, fmt.Errorf("failed to parse settings: %w", err)
 	}
+	if err := sm.sanitize(&settings); err != nil {
+		return nil, err
+	}
 	// base-dir is static and derived from runtime paths.
 	settings.BaseDir = sm.paths.BaseDir
 
@@ -60,6 +63,9 @@ func (sm *SettingsManager) Save(settings *Settings) error {
 	}
 	// base-dir is static and derived from runtime paths.
 	settings.BaseDir = sm.paths.BaseDir
+	if err := sm.sanitize(settings); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(sm.paths.SettingsDir(), 0755); err != nil {
 		return err
@@ -91,12 +97,52 @@ func (sm *SettingsManager) LoadOrDefault() (*Settings, error) {
 }
 
 func defaultSettings(baseDir string) *Settings {
+	dbType := metastore.Derby
 	return &Settings{
 		User:       runtimeUser(),
 		BaseDir:    baseDir,
-		DBURL:      defaultDBURL,
+		DBType:     string(dbType),
+		DBURL:      metastore.DefaultDBURLForBase(dbType, baseDir),
 		DBPassword: defaultDBPassword,
 	}
+}
+
+func (sm *SettingsManager) sanitize(settings *Settings) error {
+	if settings == nil {
+		return fmt.Errorf("settings required")
+	}
+	settings.User = strings.TrimSpace(settings.User)
+	if settings.User == "" {
+		settings.User = runtimeUser()
+	}
+
+	settings.DBURL = strings.TrimSpace(settings.DBURL)
+	settings.DBPassword = strings.TrimSpace(settings.DBPassword)
+	if settings.DBPassword == "" {
+		settings.DBPassword = defaultDBPassword
+	}
+
+	rawType := strings.TrimSpace(settings.DBType)
+	if rawType == "" {
+		if inferred := metastore.InferDBTypeFromURL(settings.DBURL); inferred != "" {
+			rawType = string(inferred)
+		}
+	}
+	dbType, err := metastore.NormalizeDBType(rawType)
+	if err != nil {
+		return err
+	}
+	settings.DBType = string(dbType)
+
+	if settings.DBURL == "" {
+		settings.DBURL = metastore.DefaultDBURLForBase(dbType, sm.paths.BaseDir)
+		return nil
+	}
+	if dbType == metastore.Derby && settings.DBURL == metastore.DefaultDBURL(metastore.Derby) {
+		// Migrate legacy relative Derby path to base-dir-scoped absolute path.
+		settings.DBURL = metastore.DefaultDBURLForBase(dbType, sm.paths.BaseDir)
+	}
+	return nil
 }
 
 func runtimeUser() string {

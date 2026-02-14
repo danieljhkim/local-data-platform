@@ -2,13 +2,16 @@ package hive
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/env"
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/service"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -53,12 +56,15 @@ func NewHiveService(paths *config.Paths) (*HiveService, error) {
 func (h *HiveService) Start() error {
 	util.Log("Starting Hive services...")
 
-	// Check if Postgres JDBC driver is needed
+	// Clean up stale Derby lock files if using embedded Derby
+	h.cleanStaleDerbyLocks()
+
+	// Ensure required JDBC drivers are available.
 	if err := h.ensurePostgresJDBC(); err != nil {
 		return err
 	}
 
-	// Ensure metastore schema is initialized (Postgres only)
+	// Ensure metastore schema is initialized
 	if err := h.ensureMetastoreSchema(); err != nil {
 		return err
 	}
@@ -73,45 +79,23 @@ func (h *HiveService) Start() error {
 		return err
 	}
 
+	// Wait for HiveServer2 to be ready for connections
+	if err := h.waitForHiveServer2(); err != nil {
+		util.Warn("HiveServer2 may not be ready yet: %v", err)
+	}
+
 	return nil
 }
 
 // ensurePostgresJDBC ensures Postgres JDBC driver is available if needed
 // Also sets h.usesPostgresMetastore if Postgres is detected
 func (h *HiveService) ensurePostgresJDBC() error {
-	hiveConfDir := h.env.HiveConfDir
-	hiveSiteXML := filepath.Join(hiveConfDir, "hive-site.xml")
-
-	// Check if hive-site.xml exists and uses Postgres
-	if _, err := os.Stat(hiveSiteXML); err == nil {
-		content, err := os.ReadFile(hiveSiteXML)
-		if err == nil {
-			contentStr := string(content)
-			if strings.Contains(contentStr, "jdbc:postgresql:") ||
-				strings.Contains(contentStr, "org.postgresql.Driver") {
-
-				h.usesPostgresMetastore = true
-
-				util.Log("Postgres metastore detected, ensuring JDBC driver is available...")
-				jarPath, err := EnsurePostgresJDBCDriver(h.env.HiveHome, h.env.SparkHome, h.paths.BaseDir)
-				if err != nil {
-					return fmt.Errorf("failed to ensure Postgres JDBC driver: %w", err)
-				}
-
-				// If driver is in fallback location, set HIVE_AUX_JARS_PATH
-				hiveLibDir := filepath.Join(h.env.HiveHome, "lib")
-				if !strings.HasPrefix(jarPath, hiveLibDir) {
-					// Add to HIVE_AUX_JARS_PATH in environment
-					currentAux := os.Getenv("HIVE_AUX_JARS_PATH")
-					if currentAux == "" {
-						os.Setenv("HIVE_AUX_JARS_PATH", jarPath)
-					} else {
-						os.Setenv("HIVE_AUX_JARS_PATH", jarPath+":"+currentAux)
-					}
-					util.Log("Set HIVE_AUX_JARS_PATH=%s", jarPath)
-				}
-			}
-		}
+	dbType, _, err := h.detectMetastoreConfig()
+	if err != nil {
+		return nil
+	}
+	if err := h.ensureJDBCDriver(dbType); err != nil {
+		return err
 	}
 
 	return nil
@@ -263,6 +247,96 @@ func (h *HiveService) showListenerLine(port int, label string) {
 	if !found {
 		fmt.Printf("  %s:%d not listening\n", label, port)
 	}
+}
+
+// cleanStaleDerbyLocks removes stale Derby lock files if the metastore uses
+// embedded Derby and no Hive process currently holds the lock.
+func (h *HiveService) cleanStaleDerbyLocks() {
+	dbType, dbURL, err := h.detectMetastoreConfig()
+	if err != nil || dbType != metastore.Derby {
+		return
+	}
+
+	// Extract the databaseName path from the Derby JDBC URL
+	dbPath := extractDerbyDBPath(dbURL)
+	if dbPath == "" {
+		return
+	}
+
+	lockFile := filepath.Join(dbPath, "db.lck")
+	if _, err := os.Stat(lockFile); os.IsNotExist(err) {
+		return
+	}
+
+	// Check if any Hive process is actually running (metastore or HS2)
+	metaPid, _ := h.procMgr.Status("metastore")
+	hs2Pid, _ := h.procMgr.Status("hiveserver2")
+	if metaPid > 0 || hs2Pid > 0 {
+		return // A live process holds the lock
+	}
+
+	util.Log("Removing stale Derby lock files from %s", dbPath)
+	os.Remove(filepath.Join(dbPath, "db.lck"))
+	os.Remove(filepath.Join(dbPath, "dbex.lck"))
+}
+
+// extractDerbyDBPath extracts the databaseName value from a Derby JDBC URL.
+// e.g. "jdbc:derby:;databaseName=/path/to/db;create=true" -> "/path/to/db"
+func extractDerbyDBPath(dbURL string) string {
+	for _, part := range strings.Split(dbURL, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "databaseName=") {
+			return strings.TrimPrefix(part, "databaseName=")
+		}
+	}
+	return ""
+}
+
+// waitForHiveServer2 polls the HiveServer2 thrift port until it is accepting
+// connections or a timeout is reached.
+func (h *HiveService) waitForHiveServer2() error {
+	port := h.getHS2Port()
+	addr := fmt.Sprintf("localhost:%d", port)
+
+	util.Log("Waiting for HiveServer2 to be ready on port %d...", port)
+
+	maxRetries := 30 // 30 x 2s = 60s max
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			util.Log("HiveServer2 is ready.")
+			return nil
+		}
+
+		// Verify the process is still alive
+		pid, _ := h.procMgr.Status("hiveserver2")
+		if pid == 0 {
+			return fmt.Errorf("HiveServer2 process exited before becoming ready (check logs: %s)",
+				filepath.Join(h.procMgr.LogDir, "hiveserver2.log"))
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("HiveServer2 did not become ready within 60 seconds")
+}
+
+// getHS2Port reads the HiveServer2 thrift port from the active hive-site.xml.
+// Falls back to 10000 if not configured.
+func (h *HiveService) getHS2Port() int {
+	hiveSite := filepath.Join(h.env.HiveConfDir, "hive-site.xml")
+	cfg, err := util.ParseHadoopXML(hiveSite)
+	if err != nil {
+		return 10000
+	}
+	portStr := strings.TrimSpace(cfg.GetProperty("hive.server2.thrift.port"))
+	if portStr == "" {
+		return 10000
+	}
+	port := 10000
+	fmt.Sscanf(portStr, "%d", &port)
+	return port
 }
 
 // Logs displays Hive service logs

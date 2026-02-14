@@ -7,11 +7,13 @@ import (
 
 	"github.com/danieljhkim/local-data-platform/internal/config/profiles"
 	"github.com/danieljhkim/local-data-platform/internal/config/schema"
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 )
 
 // InitOptions holds optional parameters for profile initialization
 type InitOptions struct {
 	User       string // Override username
+	DBType     string // Override metastore DB type
 	DBUrl      string // Override database connection URL
 	DBPassword string // Override database password
 }
@@ -126,6 +128,16 @@ func (g *ConfigGenerator) applyInitOptions(configSet *schema.ConfigSet, opts *In
 
 	// Apply DB options to Hive config
 	if result.Hive != nil {
+		dbType, _ := metastore.NormalizeDBType(opts.DBType)
+		result.Hive.ConnectionDriverName = metastore.DriverClass(dbType)
+		result.Hive.ConnectionUserName = metastore.ConnectionUser(dbType, opts.User)
+
+		derivedURL := metastore.DefaultDBURL(dbType)
+		if opts.DBUrl != "" {
+			derivedURL = opts.DBUrl
+		}
+		result.Hive.ConnectionURL = derivedURL
+
 		if opts.DBUrl != "" {
 			result.Hive.ConnectionURL = opts.DBUrl
 		}

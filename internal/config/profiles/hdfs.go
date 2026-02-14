@@ -51,15 +51,21 @@ func HDFSProfile() *Profile {
 				},
 			},
 			Hive: &schema.HiveConfig{
-				ConnectionURL:        "jdbc:postgresql://localhost:5432/metastore",
-				ConnectionDriverName: "org.postgresql.Driver",
-				ConnectionUserName:   "{{USER}}",
+				ConnectionURL:        "jdbc:derby:;databaseName=metastore_db;create=true",
+				ConnectionDriverName: "org.apache.derby.iapi.jdbc.AutoloadedDriver",
+				ConnectionUserName:   "APP",
 				ConnectionPassword:   "password",
+				MetastoreURIs:        "thrift://localhost:9083",
 				WarehouseDir:         "/user/hive/warehouse", // HDFS path
 				TransportMode:        "binary",
 				ThriftPort:           10000,
 				Authentication:       "NONE",
 				EnableDoAs:           false,
+				Extra: []schema.Property{
+					{Name: "hive.metastore.event.db.notification.api.auth", Value: "false"},
+					{Name: "hive.execution.engine", Value: "mr"},
+					{Name: "hive.server2.tez.initialize.default.sessions", Value: "false"},
+				},
 			},
 			Spark: &schema.SparkConfig{
 				Master:                "local[*]",

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -20,8 +21,8 @@ const (
 
 // checkMetastoreSchema checks if the Hive metastore schema is initialized
 // Returns SchemaInitialized if schema exists, SchemaNotInitialized if not, SchemaUnknown on error
-func (h *HiveService) checkMetastoreSchema() (SchemaStatus, error) {
-	cmd := exec.Command("schematool", "-dbType", "postgres", "-info")
+func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatus, error) {
+	cmd := exec.Command("schematool", "-dbType", string(dbType), "-info")
 	cmd.Env = h.env.Export()
 
 	var stdout, stderr bytes.Buffer
@@ -65,10 +66,10 @@ func (h *HiveService) checkMetastoreSchema() (SchemaStatus, error) {
 }
 
 // initMetastoreSchema initializes the Hive metastore schema
-func (h *HiveService) initMetastoreSchema() error {
+func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
 	util.Log("Initializing Hive metastore schema...")
 
-	cmd := exec.Command("schematool", "-dbType", "postgres", "-initSchema")
+	cmd := exec.Command("schematool", "-dbType", string(dbType), "-initSchema")
 	cmd.Env = h.env.Export()
 
 	var stdout, stderr bytes.Buffer
@@ -94,19 +95,22 @@ func (h *HiveService) initMetastoreSchema() error {
 	return nil
 }
 
-// ensureMetastoreSchema checks if schema is initialized and initializes if needed
-// Only runs for Postgres metastore configurations
 func (h *HiveService) ensureMetastoreSchema() error {
-	// First check if this is a Postgres metastore
-	if !h.isPostgresMetastore() {
-		return nil
+	dbType, _, err := h.detectMetastoreConfig()
+	if err != nil {
+		return err
 	}
+	return h.ensureMetastoreSchemaForType(dbType, false)
+}
 
+func (h *HiveService) ensureMetastoreSchemaForType(dbType metastore.DBType, strict bool) error {
 	util.Log("Checking Hive metastore schema...")
 
-	status, err := h.checkMetastoreSchema()
+	status, err := h.checkMetastoreSchema(dbType)
 	if err != nil {
-		// Log warning but don't fail - metastore might still work
+		if strict {
+			return err
+		}
 		util.Warn("Could not check metastore schema: %v", err)
 		util.Warn("Will attempt to start metastore anyway")
 		return nil
@@ -119,20 +123,29 @@ func (h *HiveService) ensureMetastoreSchema() error {
 
 	case SchemaNotInitialized:
 		util.Log("Metastore schema not found, initializing...")
-		if err := h.initMetastoreSchema(); err != nil {
-			return err
+		if err := h.initMetastoreSchema(dbType); err != nil {
+			if strict {
+				return err
+			}
+			util.Warn("Failed to initialize metastore schema: %v", err)
+			util.Warn("Will attempt to start metastore anyway")
+			return nil
 		}
 		return nil
 
 	default:
+		if strict {
+			return fmt.Errorf("could not determine metastore schema status")
+		}
 		util.Warn("Could not determine schema status, will attempt to start metastore")
 		return nil
 	}
 }
 
-// isPostgresMetastore checks if the current config uses Postgres metastore
+func (h *HiveService) ensureMetastoreSchemaStrict(dbType metastore.DBType) error {
+	return h.ensureMetastoreSchemaForType(dbType, true)
+}
+
 func (h *HiveService) isPostgresMetastore() bool {
-	// This is already checked in ensurePostgresJDBC, we can reuse the logic
-	// by checking for org.postgresql.Driver in hive-site.xml
 	return h.usesPostgresMetastore
 }

@@ -38,6 +38,9 @@ func TestSettingList_PrintsAllConfigurableKeys(t *testing.T) {
 	if !strings.Contains(out, "base-dir=") {
 		t.Fatalf("output missing base-dir key:\n%s", out)
 	}
+	if !strings.Contains(out, "db-type=") {
+		t.Fatalf("output missing db-type key:\n%s", out)
+	}
 	if !strings.Contains(out, "db-url=") {
 		t.Fatalf("output missing db-url key:\n%s", out)
 	}
@@ -54,7 +57,7 @@ func TestSettingSet_UpdatesValueInSettingsFile(t *testing.T) {
 	errBuf := &bytes.Buffer{}
 	cmd.SetOut(out)
 	cmd.SetErr(errBuf)
-	cmd.SetArgs([]string{"set", "db-url", "jdbc:postgresql://new-host:5432/newdb"})
+	cmd.SetArgs([]string{"set", "db-type", "postgres"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("setting set returned error: %v", err)
@@ -66,11 +69,36 @@ func TestSettingSet_UpdatesValueInSettingsFile(t *testing.T) {
 		t.Fatalf("failed to load settings: %v", err)
 	}
 
-	if settings.DBURL != "jdbc:postgresql://new-host:5432/newdb" {
+	if settings.DBType != "postgres" {
+		t.Fatalf("DBType = %q", settings.DBType)
+	}
+	if settings.DBURL != "jdbc:postgresql://localhost:5432/metastore" {
 		t.Fatalf("DBURL = %q", settings.DBURL)
 	}
-	if !strings.Contains(errBuf.String(), "Run 'local-data profile init'") {
+	if !strings.Contains(errBuf.String(), "Run 'local-data init --force'") {
 		t.Fatalf("expected profile init warning, got: %s", errBuf.String())
+	}
+}
+
+func TestSettingSet_DBURLMismatchIsRejected(t *testing.T) {
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"set", "db-url", "jdbc:postgresql://new-host:5432/newdb"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected mismatch error")
+	}
+	if !strings.Contains(err.Error(), "db-type and db-url must match") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "WARNING:") {
+		t.Fatalf("expected warning, got: %s", errBuf.String())
 	}
 }
 
