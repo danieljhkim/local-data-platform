@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 const DefaultMySQLJDBCVersion = "8.4.0"
@@ -60,7 +62,9 @@ func EnsureMySQLJDBCDriver(hiveHome, sparkHome, baseDir string) (string, error) 
 
 	if sparkJarsDir != "" {
 		if _, err := findMySQLJar(sparkJarsDir); err != nil {
-			_ = ensureJarInSparkDir(foundJar, sparkJarsDir)
+			if copyErr := ensureJarInSparkDir(foundJar, sparkJarsDir); copyErr != nil {
+				util.Warn("Could not copy MySQL JDBC driver to %s: %v", sparkJarsDir, copyErr)
+			}
 		}
 	}
 

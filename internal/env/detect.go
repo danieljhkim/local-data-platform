@@ -43,12 +43,17 @@ func NewJavaDetector() *JavaDetector {
 	return &JavaDetector{}
 }
 
-// FindJavaHome returns the hardcoded Java 17 path from Homebrew installation
-// Java 17 is automatically downloaded via brew during installation
+// FindJavaHome returns the Java 17 path from Homebrew installation.
+// Checks both ARM (/opt/homebrew) and Intel (/usr/local) Homebrew prefixes.
 func (j *JavaDetector) FindJavaHome() string {
-	const java17Home = "/opt/homebrew/opt/openjdk@17"
-	if _, err := os.Stat(java17Home); err == nil {
-		return java17Home
+	candidates := []string{
+		"/opt/homebrew/opt/openjdk@17", // ARM Mac
+		"/usr/local/opt/openjdk@17",    // Intel Mac
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
 	}
 	return ""
 }

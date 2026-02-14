@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
@@ -81,7 +82,9 @@ func (y *YARNService) startResourceManager() error {
 	pid = findWithJPS("ResourceManager")
 	if pid > 0 && isProcessRunning(pid) {
 		pidFile := filepath.Join(y.procMgr.PidDir, name+".pid")
-		os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644)
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644); err != nil {
+			util.Warn("Failed to update ResourceManager PID file: %v", err)
+		}
 		util.Log("YARN ResourceManager already running (pid %d).", pid)
 		return nil
 	}
@@ -115,7 +118,9 @@ func (y *YARNService) startNodeManager() error {
 	pid = findWithJPS("NodeManager")
 	if pid > 0 && isProcessRunning(pid) {
 		pidFile := filepath.Join(y.procMgr.PidDir, name+".pid")
-		os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644)
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644); err != nil {
+			util.Warn("Failed to update NodeManager PID file: %v", err)
+		}
 		util.Log("YARN NodeManager already running (pid %d).", pid)
 		return nil
 	}
@@ -271,7 +276,7 @@ func isProcessRunning(pid int) bool {
 		return false
 	}
 
-	err = process.Signal(os.Signal(nil))
+	err = process.Signal(syscall.Signal(0))
 	return err == nil
 }
 

@@ -139,21 +139,6 @@ func IsProcessRunning(pid int) bool {
 	return err == nil
 }
 
-// GetProcessInfo returns information about a process
-func GetProcessInfo(pid int) string {
-	if pid == 0 {
-		return ""
-	}
-
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSpace(string(output))
-}
-
 // WaitForSafeMode waits for HDFS to exit safe mode
 // Returns error if timeout is reached
 func WaitForSafeMode(maxRetries int) error {

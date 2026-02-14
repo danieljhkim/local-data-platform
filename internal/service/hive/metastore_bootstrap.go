@@ -138,6 +138,9 @@ func (h *HiveService) databaseExists(dbType metastore.DBType, dbURL string) (boo
 		if err != nil {
 			return false, err
 		}
+		if !dbIdentPattern.MatchString(dbName) {
+			return false, fmt.Errorf("unsupported postgres database name %q", dbName)
+		}
 		sql := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s';", escapeSQLLiteral(dbName))
 		cmd := exec.Command("psql", adminURL, "-tAc", sql)
 		cmd.Env = h.env.Export()
@@ -151,11 +154,14 @@ func (h *HiveService) databaseExists(dbType metastore.DBType, dbURL string) (boo
 		if err != nil {
 			return false, err
 		}
+		if !dbIdentPattern.MatchString(info.dbName) {
+			return false, fmt.Errorf("unsupported mysql database name %q", info.dbName)
+		}
 		args := mysqlBaseArgs(info)
 		query := fmt.Sprintf("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='%s';", escapeSQLLiteral(info.dbName))
 		args = append(args, "-e", query)
 		cmd := exec.Command("mysql", args...)
-		cmd.Env = h.env.Export()
+		cmd.Env = mysqlCmdEnv(h.env.Export(), info)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return false, fmt.Errorf("mysql database existence check failed: %v\nOutput: %s", err, strings.TrimSpace(string(out)))
@@ -195,7 +201,7 @@ func (h *HiveService) createDatabase(dbType metastore.DBType, dbURL string) erro
 		args := mysqlBaseArgs(info)
 		args = append(args, "-e", fmt.Sprintf("CREATE DATABASE `%s`;", info.dbName))
 		cmd := exec.Command("mysql", args...)
-		cmd.Env = h.env.Export()
+		cmd.Env = mysqlCmdEnv(h.env.Export(), info)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("failed to create mysql database %q: %v\nOutput: %s", info.dbName, err, strings.TrimSpace(string(out)))
@@ -261,10 +267,18 @@ func mysqlBaseArgs(info *mysqlConnInfo) []string {
 	if info.user != "" {
 		args = append(args, "--user", info.user)
 	}
-	if info.password != "" {
-		args = append(args, fmt.Sprintf("--password=%s", info.password))
-	}
+	// Password is passed via MYSQL_PWD env var in mysqlCmdEnv() to avoid
+	// exposing it in process listings (ps aux).
 	return args
+}
+
+// mysqlCmdEnv returns environment variables for MySQL commands,
+// including MYSQL_PWD if a password is set.
+func mysqlCmdEnv(baseEnv []string, info *mysqlConnInfo) []string {
+	if info.password != "" {
+		return append(baseEnv, "MYSQL_PWD="+info.password)
+	}
+	return baseEnv
 }
 
 func escapeSQLLiteral(s string) string {

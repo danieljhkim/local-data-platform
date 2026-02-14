@@ -129,7 +129,9 @@ func (h *HDFSService) startNameNode() error {
 		// Update PID file
 		hdfsPaths := h.paths.HDFSPaths()
 		pidFile := filepath.Join(hdfsPaths.PidsDir, "namenode.pid")
-		os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644)
+		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+			util.Warn("Failed to update NameNode PID file: %v", err)
+		}
 		util.Log("HDFS NameNode already running (pid %d).", pid)
 		return nil
 	}
@@ -171,7 +173,9 @@ func (h *HDFSService) startDataNode() error {
 		// Update PID file
 		hdfsPaths := h.paths.HDFSPaths()
 		pidFile := filepath.Join(hdfsPaths.PidsDir, "datanode.pid")
-		os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644)
+		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+			util.Warn("Failed to update DataNode PID file: %v", err)
+		}
 		util.Log("HDFS DataNode already running (pid %d).", pid)
 		return nil
 	}
