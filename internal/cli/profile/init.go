@@ -1,7 +1,11 @@
 package profile
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/config/generator"
@@ -39,11 +43,48 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			paths := pathsGetter()
 			pm := config.NewProfileManager(paths)
+			sm := config.NewSettingsManager(paths)
+
+			if pm.IsInitialized() && !force {
+				fmt.Fprintf(cmd.ErrOrStderr(), "==> Profiles already initialized: %s\n", paths.UserProfilesDir())
+				fmt.Fprintln(cmd.ErrOrStderr(), "==>   (use: local-data profile init --force to overwrite)")
+				return nil
+			}
+
+			settings, err := sm.LoadOrDefault()
+			if err != nil {
+				return fmt.Errorf("failed to load settings: %w", err)
+			}
 
 			opts := &generator.InitOptions{
-				User:       user,
-				DBUrl:      dbURL,
-				DBPassword: dbPassword,
+				User:       settings.User,
+				DBUrl:      settings.DBURL,
+				DBPassword: settings.DBPassword,
+			}
+
+			if user != "" {
+				opts.User = user
+			}
+			if dbURL != "" {
+				opts.DBUrl = dbURL
+			}
+			if dbPassword != "" {
+				opts.DBPassword = dbPassword
+			}
+
+			reader := bufio.NewReader(cmd.InOrStdin())
+
+			opts.User, err = confirmInitValue(cmd.OutOrStdout(), reader, "user", opts.User)
+			if err != nil {
+				return err
+			}
+			opts.DBUrl, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-url", opts.DBUrl)
+			if err != nil {
+				return err
+			}
+			opts.DBPassword, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-password", opts.DBPassword)
+			if err != nil {
+				return err
 			}
 
 			if err := pm.Init(force, opts); err != nil {
@@ -61,4 +102,21 @@ Examples:
 	cmd.Flags().StringVar(&dbPassword, "db-password", "", "Override Hive metastore database password")
 
 	return cmd
+}
+
+func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string) (string, error) {
+	fmt.Fprintf(out, "confirm %s to be: %s\n", key, current)
+	fmt.Fprint(out, "Press Enter to confirm, or type a new value: ")
+
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("failed to read %s confirmation: %w", key, err)
+	}
+
+	value := strings.TrimSpace(line)
+	if value != "" {
+		return value, nil
+	}
+
+	return current, nil
 }

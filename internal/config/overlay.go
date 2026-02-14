@@ -45,8 +45,6 @@ func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
 				return fmt.Errorf("failed to remove existing profiles: %w", err)
 			}
 		} else {
-			util.Log("Profiles already initialized: %s", dst)
-			util.Log("  (use: local-data profile init --force to overwrite)")
 			// Keep existing files, but sync mutable settings into generated Hive XML.
 			applier := NewSettingsApplier(pm.paths)
 			if err := applier.Apply("user", "", effectiveOpts.User); err != nil {
