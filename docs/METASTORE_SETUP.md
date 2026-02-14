@@ -1,13 +1,13 @@
-# Postgres Metastore Setup (Hive)
+# Postgres Metastore Setup (Optional for Hive)
 
-This repo’s default `local` and `hdfs` Hive profile is configured to use a
-Postgres-backed Hive metastore.
+`local-data` defaults to Derby metastore.
+Use this guide only if you want a Postgres-backed metastore.
 
 This doc walks through:
 
 - Installing + starting Postgres (Homebrew)
 - Creating the metastore DB/user
-- Initializing the profiles
+- Initializing local-data with Postgres metastore
 - Adding the postgres JDBC driver jar (for hive and spark)
 
 ---
@@ -92,10 +92,10 @@ You should see a single row with `1`.
 
 ---
 
-## 4) Initialize the profiles:
+## 4) Initialize local-data with Postgres metastore:
 
 ```bash
-local-data profile init --user daniel --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "password"
+local-data init --user daniel --db-type postgres --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "password"
 ```
 
 ---
@@ -112,4 +112,3 @@ For hive and spark to work with the postgres metastore, we need to ensure the Po
   - i.e. `https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar`
 
 Once the jar is available, just run `local-data start` to start the services and you're good to go. Schema will be initialized automatically. And the jar will be added to spark as well.
-

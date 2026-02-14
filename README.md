@@ -5,7 +5,7 @@
 
 Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on cloud, and the disconnect between the cloud and my local machine.
 
-If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity. 
+If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity.
 
 Setting up a local environment is a pain, and I've had to do it many times. So I've created a tool that will help you set up a local environment quickly and easily.
 
@@ -17,6 +17,7 @@ What you get:
 - **Profile overlays**: `$BASE_DIR/conf/profiles/<name>` → runtime overlay at `$BASE_DIR/conf/current`
 - **Typed config generation**: configs are defined as Go structs (`internal/config/schema`) and serialized to XML/conf files
 - **Hermetic execution**: wrapper commands auto-inject the active runtime overlay environment
+- **Multiple metastore backends**: Derby (default, zero-config), Postgres, or MySQL
 - Per-service logs + status + stop/start helpers
 - Integrated wrapper commands for `hdfs`, `hive`, `yarn`, `pyspark`, and `spark-submit`
 - 2 profile choices:
@@ -26,7 +27,7 @@ What you get:
 **Prerequisites:**
 
 - Homebrew
-- Postgres Hive metastore setup: [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
+- Optional: Postgres/MySQL metastore setup (Derby is default): [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
 
 ---
 
@@ -34,7 +35,7 @@ What you get:
 
 ### Option 1: Install via Homebrew (Recommended)
 
-Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17). Postgres is not included, you need to install it manually.
+Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17).
 
 ```bash
 brew install danieljhkim/tap/local-data
@@ -47,11 +48,11 @@ git clone https://github.com/danieljhkim/local-data-platform.git
 cd local-data-platform
 make build
 
-# Install to /usr/local/bin (optional)
-make install
+# Install to $HOME/bin or $HOME/.local/bin (optional)
+make go-install
 
 # Install dependencies
-brew install go hadoop hive jdk@17 apache-spark postgresql@16
+brew install go hadoop hive jdk@17 apache-spark
 
 ```
 
@@ -59,28 +60,28 @@ brew install go hadoop hive jdk@17 apache-spark postgresql@16
 
 ## Quick Start
 
-Before you start, you need to make sure that the postgres metastore is setup and running. See [METASTORE_SETUP.md](docs/METASTORE_SETUP.md) for more details.
+By default, `local-data` uses Derby metastore, so no external DB setup is required.
+If you prefer Postgres/MySQL, see [METASTORE_SETUP.md](docs/METASTORE_SETUP.md).
 
 ```bash
-# Initialize profiles using default values (creates local and hdfs profiles in $BASE_DIR/conf/profiles/)
-local-data profile init
+# Initialize profiles + metastore schema using defaults
+local-data init
 
-# Note that the default values are:
-# - user: $USER
-# - base-dir: $HOME/local-data-platform
-# - db-url: jdbc:postgresql://localhost:5432/metastore
-# - db-password: password
+# Default values:
+#   - user: $USER
+#   - base-dir: $HOME/local-data-platform
+#   - db-type: derby
+#   - db-url: jdbc:derby:;databaseName=$BASE_DIR/state/hive/metastore_db;create=true
+#   - db-password: (empty)
 
-# optional flags, if you'd like to customize the profiles
-local-data profile init --user daniel --base-dir /Users/daniel/local-data-platform --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "secret"
+# initialize the metastore and profiles
+local-data init
 
-# Set current profile to hdfs (hdfs + hive + spark)
-local-data profile set hdfs
+# Set active profile
+local-data profile set hdfs    # HDFS + YARN + Hive + Spark
+local-data profile set local   # Hive + Spark only (no HDFS/YARN)
 
-# Or set to local if you just want hive + spark without HDFS
-local-data profile set local
-
-# Start all services (HDFS → YARN → Hive) or (hive only) depending on the profile
+# Start all services (HDFS → YARN → Hive) or (Hive only) depending on profile
 local-data start
 
 # Run a query
@@ -89,29 +90,54 @@ local-data hive -e "SHOW DATABASES"
 # Start a PySpark shell
 local-data pyspark
 
-# Submit a Spark job (using the active profile's spark-submit)
+# Submit a Spark job
 local-data spark-submit my_job.py
 
-# Check the status of the processes
+# Check service status
 local-data status
 
 # View logs
 local-data logs
 
-# Stop all services (in reverse order: Hive → YARN → HDFS)
+# Stop all services (reverse order: Hive → YARN → HDFS)
 local-data stop
 ```
+
+---
+
+## Settings Management
+
+User settings are persisted at `$BASE_DIR/settings/setting.json` and control profile generation.
+
+```bash
+# List current settings
+local-data setting list
+
+# Update individual settings
+local-data setting set db-type postgres
+local-data setting set db-url "jdbc:postgresql://localhost:5432/my_metastore"
+
+# Show active profile config content
+local-data setting show hive     # prints hive-site.xml
+local-data setting show spark    # prints spark-defaults.conf + spark hive-site.xml
+local-data setting show hadoop   # prints Hadoop config files
+```
+
+Setting precedence (highest to lowest):
+1. CLI flags (`--db-url`, `--db-password`, `--user`, `--db-type`)
+2. Persisted settings (`$BASE_DIR/settings/setting.json`)
+3. Built-in defaults
 
 ---
 
 ## How It Works
 
 - Profiles are generated programmatically from Go structs (no hand-edited XML required)
-- `local-data profile init` generates profile templates under `$BASE_DIR/conf/profiles/`
+- `local-data init` generates profile templates under `$BASE_DIR/conf/profiles/` and bootstraps metastore schema
 - `local-data profile set <name>` materializes the runtime overlay under `$BASE_DIR/conf/current/`
+- `local-data setting set <key> <value>` updates persisted settings and relevant profile/current Hive XML values
 - Every command computes and injects the environment for the active profile (hermetic execution)
 - Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`
-- `local-data profile set <name>` materializes a runtime overlay at `$BASE_DIR/conf/current/{hadoop,hive,spark}`
 - Wrapper commands (hdfs, hive, yarn, etc.) automatically use the overlay configuration
 - `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`, `HIVE_CONF_DIR`, and `PATH` set to use the overlay
 - Services write logs to `$BASE_DIR/state/<service>/logs`
@@ -155,7 +181,8 @@ local-data-platform/
 ├── internal/
 │   ├── cli/                 # Cobra CLI commands
 │   │   ├── env/             # env print/exec/doctor
-│   │   ├── profile/         # profile init/list/set/check
+│   │   ├── profile/         # profile list/set/check
+│   │   ├── setting/         # setting list/set/show
 │   │   ├── service/         # start/stop/status
 │   │   ├── wrappers/        # wrapper commands (hdfs, hive, yarn, etc.)
 │   │   ├── logs.go          # combined logs
@@ -165,11 +192,12 @@ local-data-platform/
 │   │   ├── profiles/        # built-in profile definitions
 │   │   └── schema/          # typed config structs (Hadoop/Hive/Spark)
 │   ├── env/                 # environment detection + computation
+│   ├── metastore/           # metastore DB type detection + validation
 │   ├── service/             # service lifecycle (ProcessManager)
 │   │   ├── hdfs/
 │   │   ├── yarn/
 │   │   └── hive/
-│   └── util/                # shared helpers (fs/xml/shell/log)
+│   └── util/                # shared helpers (fs/xml/shell/log/color)
 └── Makefile
 ```
 
