@@ -8,3 +8,5 @@
 
 .orbit
 raw
+metastore_db
+derby.log
