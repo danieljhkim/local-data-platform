@@ -3,9 +3,13 @@ package yarn
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/service"
 )
 
 // setupTestProfile creates a minimal test profile structure using ProfileManager.Init()
@@ -150,6 +154,98 @@ func TestFindWithJPS_NotFound(t *testing.T) {
 
 	if pid != 0 {
 		t.Errorf("findWithJPS() = %d, want 0 for non-existent process", pid)
+	}
+}
+
+func TestFindJPSPIDFromOutput_MatchesYARNDaemonClassesExactly(t *testing.T) {
+	output := []byte(strings.Join([]string{
+		"101 org.apache.hadoop.yarn.server.resourcemanager.ResourceManagerHelper",
+		"202 org.apache.hadoop.yarn.server.resourcemanager.ResourceManager",
+		"303 com.example.NodeManagerSidecar",
+		"404 org.apache.hadoop.yarn.server.nodemanager.NodeManager",
+	}, "\n"))
+
+	if pid := findJPSPIDFromOutput(output, "ResourceManager"); pid != 202 {
+		t.Fatalf("findJPSPIDFromOutput(ResourceManager) = %d, want 202", pid)
+	}
+	if pid := findJPSPIDFromOutput(output, "NodeManager"); pid != 404 {
+		t.Fatalf("findJPSPIDFromOutput(NodeManager) = %d, want 404", pid)
+	}
+}
+
+func TestFindJPSPIDFromOutput_DoesNotMatchArbitrarySubstrings(t *testing.T) {
+	output := []byte(strings.Join([]string{
+		"101 org.apache.hadoop.yarn.server.resourcemanager.ResourceManagerHelper",
+		"202 com.example.MyResourceManager",
+		"303 com.example.NodeManagerSidecar",
+		"404 com.example.MyNodeManager",
+	}, "\n"))
+
+	if pid := findJPSPIDFromOutput(output, "ResourceManager"); pid != 0 {
+		t.Fatalf("findJPSPIDFromOutput(ResourceManager) = %d, want 0 for substring-only matches", pid)
+	}
+	if pid := findJPSPIDFromOutput(output, "NodeManager"); pid != 0 {
+		t.Fatalf("findJPSPIDFromOutput(NodeManager) = %d, want 0 for substring-only matches", pid)
+	}
+}
+
+func TestKillProcess_SIGTERMThenSIGKILLWhenStillRunning(t *testing.T) {
+	var signals []syscall.Signal
+	running := true
+
+	err := killProcessWithOptions(42, service.TerminateOptions{
+		Timeout: 0,
+		IsRunning: func(pid int) bool {
+			if pid != 42 {
+				t.Fatalf("IsRunning called with pid %d, want 42", pid)
+			}
+			return running
+		},
+		Signal: func(pid int, signal syscall.Signal) error {
+			if pid != 42 {
+				t.Fatalf("Signal called with pid %d, want 42", pid)
+			}
+			signals = append(signals, signal)
+			if signal == syscall.SIGKILL {
+				running = false
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("killProcessWithOptions() error = %v", err)
+	}
+
+	want := []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}
+	if !reflect.DeepEqual(signals, want) {
+		t.Fatalf("signals = %v, want %v", signals, want)
+	}
+}
+
+func TestKillProcess_NoSIGKILLWhenSIGTERMStopsProcess(t *testing.T) {
+	var signals []syscall.Signal
+	running := true
+
+	err := killProcessWithOptions(42, service.TerminateOptions{
+		Timeout: 0,
+		IsRunning: func(pid int) bool {
+			return running
+		},
+		Signal: func(pid int, signal syscall.Signal) error {
+			signals = append(signals, signal)
+			if signal == syscall.SIGTERM {
+				running = false
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("killProcessWithOptions() error = %v", err)
+	}
+
+	want := []syscall.Signal{syscall.SIGTERM}
+	if !reflect.DeepEqual(signals, want) {
+		t.Fatalf("signals = %v, want %v", signals, want)
 	}
 }
 

@@ -16,6 +16,29 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
+const (
+	yarnResourceManagerClass = "org.apache.hadoop.yarn.server.resourcemanager.ResourceManager"
+	yarnNodeManagerClass     = "org.apache.hadoop.yarn.server.nodemanager.NodeManager"
+	yarnStopTimeout          = 5 * time.Second
+)
+
+var yarnJPSClasses = map[string][]string{
+	"ResourceManager": {
+		"ResourceManager",
+		yarnResourceManagerClass,
+	},
+	yarnResourceManagerClass: {
+		yarnResourceManagerClass,
+	},
+	"NodeManager": {
+		"NodeManager",
+		yarnNodeManagerClass,
+	},
+	yarnNodeManagerClass: {
+		yarnNodeManagerClass,
+	},
+}
+
 // YARNService manages the YARN ResourceManager and NodeManager services
 type YARNService struct {
 	paths   *config.Paths
@@ -256,20 +279,36 @@ func findWithJPS(className string) int {
 		return 0
 	}
 
+	return findJPSPIDFromOutput(output, className)
+}
+
+func findJPSPIDFromOutput(output []byte, className string) int {
+	allowedClasses := yarnJPSClasses[className]
+	if len(allowedClasses) == 0 {
+		allowedClasses = []string{className}
+	}
+
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, className) {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				pid, err := strconv.Atoi(fields[0])
-				if err == nil {
-					return pid
-				}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && matchesJPSClass(fields[1], allowedClasses) {
+			pid, err := strconv.Atoi(fields[0])
+			if err == nil {
+				return pid
 			}
 		}
 	}
 
 	return 0
+}
+
+func matchesJPSClass(actual string, allowedClasses []string) bool {
+	for _, allowed := range allowedClasses {
+		if actual == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // isProcessRunning checks if a process is running using kill -0
@@ -283,20 +322,14 @@ func isProcessRunning(pid int) bool {
 	return err == nil
 }
 
-// killProcess sends SIGTERM to a process
+// killProcess sends SIGTERM to a process and escalates only if it stays alive.
 func killProcess(pid int) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
+	return killProcessWithOptions(pid, service.TerminateOptions{
+		Timeout:   yarnStopTimeout,
+		IsRunning: isProcessRunning,
+	})
+}
 
-	// Send SIGTERM
-	if err := process.Kill(); err != nil {
-		return err
-	}
-
-	// Wait a bit for graceful shutdown
-	time.Sleep(500 * time.Millisecond)
-
-	return nil
+func killProcessWithOptions(pid int, options service.TerminateOptions) error {
+	return service.TerminatePIDWithOptions(pid, options)
 }
