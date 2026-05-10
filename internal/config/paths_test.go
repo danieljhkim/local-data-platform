@@ -103,15 +103,21 @@ func TestDefaultBaseDir(t *testing.T) {
 	oldBaseDir := os.Getenv("BASE_DIR")
 	defer func() {
 		if oldBaseDir != "" {
-			os.Setenv("BASE_DIR", oldBaseDir)
+			if err := os.Setenv("BASE_DIR", oldBaseDir); err != nil {
+				t.Errorf("failed to restore BASE_DIR: %v", err)
+			}
 		} else {
-			os.Unsetenv("BASE_DIR")
+			if err := os.Unsetenv("BASE_DIR"); err != nil {
+				t.Errorf("failed to unset BASE_DIR: %v", err)
+			}
 		}
 	}()
 
 	t.Run("ignores BASE_DIR env", func(t *testing.T) {
 		testDir := "/custom/base/dir"
-		os.Setenv("BASE_DIR", testDir)
+		if err := os.Setenv("BASE_DIR", testDir); err != nil {
+			t.Fatalf("failed to set BASE_DIR: %v", err)
+		}
 
 		result := DefaultBaseDir()
 		homeDir, _ := os.UserHomeDir()
@@ -122,7 +128,9 @@ func TestDefaultBaseDir(t *testing.T) {
 	})
 
 	t.Run("without BASE_DIR env", func(t *testing.T) {
-		os.Unsetenv("BASE_DIR")
+		if err := os.Unsetenv("BASE_DIR"); err != nil {
+			t.Fatalf("failed to unset BASE_DIR: %v", err)
+		}
 
 		result := DefaultBaseDir()
 		homeDir, _ := os.UserHomeDir()

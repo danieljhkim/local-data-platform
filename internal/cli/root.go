@@ -117,8 +117,9 @@ func init() {
 		Use:   "version",
 		Short: "Print the local-data CLI version",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintln(os.Stdout, rootCmd.Version)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), rootCmd.Version)
+			return err
 		},
 	}
 	addCmdToGroup(rootCmd, versionCmd, "util")

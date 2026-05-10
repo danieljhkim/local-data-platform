@@ -145,7 +145,3 @@ func (h *HiveService) ensureMetastoreSchemaForType(dbType metastore.DBType, stri
 func (h *HiveService) ensureMetastoreSchemaStrict(dbType metastore.DBType) error {
 	return h.ensureMetastoreSchemaForType(dbType, true)
 }
-
-func (h *HiveService) isPostgresMetastore() bool {
-	return h.usesPostgresMetastore
-}

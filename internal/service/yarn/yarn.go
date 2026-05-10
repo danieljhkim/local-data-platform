@@ -177,7 +177,9 @@ func (y *YARNService) Stop() error {
 
 		// Clean up PID file
 		pidFile := filepath.Join(y.procMgr.PidDir, svc.name+".pid")
-		os.Remove(pidFile)
+		if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
+			util.Warn("Failed to remove YARN PID file %s: %v", pidFile, err)
+		}
 	}
 
 	return nil

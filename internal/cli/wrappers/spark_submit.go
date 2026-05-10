@@ -26,7 +26,9 @@ func NewSparkSubmitCmd(pathsGetter PathsGetter) *cobra.Command {
 			// This is needed for Spark event logging
 			profile, _ := paths.ActiveProfile()
 			if profile == "hdfs" {
-				hdfs.EnsureSparkHistoryDir(env.MergeWithCurrent())
+				if err := hdfs.EnsureSparkHistoryDir(env.MergeWithCurrent()); err != nil {
+					return err
+				}
 			}
 
 			cmdArgs := append([]string{"spark-submit"}, args...)

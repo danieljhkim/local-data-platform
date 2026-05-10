@@ -8,6 +8,20 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
+func mkdirFormatTestDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatalf("failed to create test dir %s: %v", path, err)
+	}
+}
+
+func writeFormatTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("failed to write test file %s: %v", path, err)
+	}
+}
+
 func TestEnsureLocalStorageDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 	baseDir := filepath.Join(tmpDir, "test-base")
@@ -82,7 +96,7 @@ func TestEnsureNameNodeFormatted_NoConfig(t *testing.T) {
 func TestEnsureNameNodeFormatted_AlreadyFormatted(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
-	os.MkdirAll(confDir, 0755)
+	mkdirFormatTestDir(t, confDir)
 
 	// Create hdfs-site.xml with namenode dir configuration
 	nameNodeDir := filepath.Join(tmpDir, "namenode")
@@ -95,13 +109,13 @@ func TestEnsureNameNodeFormatted_AlreadyFormatted(t *testing.T) {
 </configuration>`
 
 	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	os.WriteFile(hdfsConfFile, []byte(hdfsConfig), 0644)
+	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
 
 	// Create VERSION file to simulate already formatted namenode
 	versionDir := filepath.Join(nameNodeDir, "current")
-	os.MkdirAll(versionDir, 0755)
+	mkdirFormatTestDir(t, versionDir)
 	versionFile := filepath.Join(versionDir, "VERSION")
-	os.WriteFile(versionFile, []byte("test version"), 0644)
+	writeFormatTestFile(t, versionFile, []byte("test version"))
 
 	// Should not try to format since VERSION file exists
 	err := EnsureNameNodeFormatted(confDir)
@@ -113,7 +127,7 @@ func TestEnsureNameNodeFormatted_AlreadyFormatted(t *testing.T) {
 func TestEnsureNameNodeFormatted_NonEmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
-	os.MkdirAll(confDir, 0755)
+	mkdirFormatTestDir(t, confDir)
 
 	// Create hdfs-site.xml with namenode dir configuration
 	nameNodeDir := filepath.Join(tmpDir, "namenode")
@@ -126,11 +140,11 @@ func TestEnsureNameNodeFormatted_NonEmptyDirectory(t *testing.T) {
 </configuration>`
 
 	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	os.WriteFile(hdfsConfFile, []byte(hdfsConfig), 0644)
+	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
 
 	// Create namenode dir with a file (but no VERSION file)
-	os.MkdirAll(nameNodeDir, 0755)
-	os.WriteFile(filepath.Join(nameNodeDir, "somefile.txt"), []byte("data"), 0644)
+	mkdirFormatTestDir(t, nameNodeDir)
+	writeFormatTestFile(t, filepath.Join(nameNodeDir, "somefile.txt"), []byte("data"))
 
 	// Should return error - directory is not empty and not formatted
 	err := EnsureNameNodeFormatted(confDir)
@@ -142,7 +156,7 @@ func TestEnsureNameNodeFormatted_NonEmptyDirectory(t *testing.T) {
 func TestEnsureNameNodeFormatted_EmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
-	os.MkdirAll(confDir, 0755)
+	mkdirFormatTestDir(t, confDir)
 
 	// Create hdfs-site.xml with namenode dir configuration
 	nameNodeDir := filepath.Join(tmpDir, "namenode")
@@ -155,10 +169,10 @@ func TestEnsureNameNodeFormatted_EmptyDirectory(t *testing.T) {
 </configuration>`
 
 	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	os.WriteFile(hdfsConfFile, []byte(hdfsConfig), 0644)
+	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
 
 	// Create empty namenode directory
-	os.MkdirAll(nameNodeDir, 0755)
+	mkdirFormatTestDir(t, nameNodeDir)
 
 	// Should try to format (will fail in unit tests since hdfs command not available)
 	// but we're testing the logic path

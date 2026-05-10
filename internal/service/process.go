@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,14 +52,22 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 
 	// Start the process (non-blocking)
 	if err := cmd.Start(); err != nil {
-		logf.Close()
+		if closeErr := logf.Close(); closeErr != nil {
+			return 0, fmt.Errorf("failed to start process: %w; additionally failed to close log file: %v", err, closeErr)
+		}
 		return 0, fmt.Errorf("failed to start process: %w", err)
 	}
 
 	pid := cmd.Process.Pid
 
 	// Close log file in parent (child has its own descriptor)
-	logf.Close()
+	if err := logf.Close(); err != nil {
+		if stopErr := cmd.Process.Kill(); stopErr != nil {
+			return 0, errors.Join(fmt.Errorf("failed to close log file: %w", err), fmt.Errorf("failed to stop started process: %w", stopErr))
+		}
+		_ = cmd.Wait()
+		return 0, fmt.Errorf("failed to close log file: %w", err)
+	}
 
 	// Write PID file
 	pidPath := filepath.Join(pm.PidDir, name+".pid")
@@ -150,7 +159,9 @@ func (pm *ProcessManager) Status(name string) (int, error) {
 	}
 
 	// Process not running, clean up stale PID file
-	os.Remove(pidPath)
+	if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("failed to remove stale PID file: %w", err)
+	}
 	return 0, nil
 }
 

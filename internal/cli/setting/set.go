@@ -41,7 +41,9 @@ Note: base-dir is static and cannot be changed via this command.`,
 				}
 				settings.DBType = string(dbType)
 				if metastore.InferDBTypeFromURL(settings.DBURL) != dbType {
-					fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: db-url %q does not match db-type %q; resetting db-url to default.\n", settings.DBURL, settings.DBType)
+					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: db-url %q does not match db-type %q; resetting db-url to default.\n", settings.DBURL, settings.DBType); err != nil {
+						return err
+					}
 					settings.DBURL = metastore.DefaultDBURLForBase(dbType, paths.BaseDir)
 				}
 			case "db-url":
@@ -57,7 +59,9 @@ Note: base-dir is static and cannot be changed via this command.`,
 				return err
 			}
 			if err := metastore.ValidateURL(dbType, settings.DBURL); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err)
+				if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err); writeErr != nil {
+					return writeErr
+				}
 				return fmt.Errorf("db-type and db-url must match")
 			}
 
@@ -70,8 +74,12 @@ Note: base-dir is static and cannot be changed via this command.`,
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Updated %s in %s\n", key, sm.Path())
-			fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: Run 'local-data init --force' to ensure regenerated profiles fully reflect updated settings.")
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Updated %s in %s\n", key, sm.Path()); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: Run 'local-data init --force' to ensure regenerated profiles fully reflect updated settings."); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
