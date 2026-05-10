@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+const (
+	hdfsNameNodeClass = "org.apache.hadoop.hdfs.server.namenode.NameNode"
+	hdfsDataNodeClass = "org.apache.hadoop.hdfs.server.datanode.DataNode"
+)
+
+var hdfsJPSClasses = map[string][]string{
+	"NameNode": {
+		"NameNode",
+		hdfsNameNodeClass,
+	},
+	hdfsNameNodeClass: {
+		hdfsNameNodeClass,
+	},
+	"DataNode": {
+		"DataNode",
+		hdfsDataNodeClass,
+	},
+	hdfsDataNodeClass: {
+		hdfsDataNodeClass,
+	},
+}
+
 // findWithJPS finds a Java process using jps command
 // Mirrors ld_hdfs_jps_pid
 func findWithJPS(className string) (int, error) {
@@ -24,24 +46,39 @@ func findWithJPS(className string) (int, error) {
 		return 0, nil // jps failed, not an error
 	}
 
-	// Parse jps output
-	// Format: <pid> <fully.qualified.ClassName>
+	return findJPSPIDFromOutput(output, className), nil
+}
+
+func findJPSPIDFromOutput(output []byte, className string) int {
+	allowedClasses := hdfsJPSClasses[className]
+	if len(allowedClasses) == 0 {
+		allowedClasses = []string{className}
+	}
+
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
-			// Check if class name contains our target
-			if strings.Contains(fields[1], className) {
+			if matchesJPSClass(fields[1], allowedClasses) {
 				pid, err := strconv.Atoi(fields[0])
 				if err == nil {
-					return pid, nil
+					return pid
 				}
 			}
 		}
 	}
 
-	return 0, nil // Not found
+	return 0
+}
+
+func matchesJPSClass(actual string, allowedClasses []string) bool {
+	for _, allowed := range allowedClasses {
+		if actual == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // findWithPgrep finds a process using pgrep command

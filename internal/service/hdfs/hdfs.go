@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/env"
@@ -110,6 +109,7 @@ func (h *HDFSService) Start() error {
 func (h *HDFSService) startNameNode() error {
 	// Check if already running
 	pid, _ := h.procMgr.Status("namenode")
+	foundByPIDFile := pid != 0
 	if pid == 0 {
 		// Try to find via jps/pgrep
 		pid, _ = FindNameNodePID()
@@ -119,10 +119,9 @@ func (h *HDFSService) startNameNode() error {
 	if pid != 0 {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS NameNode running but not using current overlay config; restarting (pid %d).", pid)
-			if err := h.procMgr.Stop("namenode"); err != nil {
-				util.Warn("Failed to stop HDFS namenode: %v", err)
+			if err := h.stopStaleDaemon("namenode", pid, foundByPIDFile); err != nil {
+				return err
 			}
-			time.Sleep(500 * time.Millisecond)
 			pid = 0
 		}
 	}
@@ -156,6 +155,7 @@ func (h *HDFSService) startNameNode() error {
 func (h *HDFSService) startDataNode() error {
 	// Check if already running
 	pid, _ := h.procMgr.Status("datanode")
+	foundByPIDFile := pid != 0
 	if pid == 0 {
 		// Try to find via jps/pgrep
 		pid, _ = FindDataNodePID()
@@ -165,10 +165,9 @@ func (h *HDFSService) startDataNode() error {
 	if pid != 0 {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS DataNode running but not using current overlay config; restarting (pid %d).", pid)
-			if err := h.procMgr.Stop("datanode"); err != nil {
-				util.Warn("Failed to stop HDFS datanode: %v", err)
+			if err := h.stopStaleDaemon("datanode", pid, foundByPIDFile); err != nil {
+				return err
 			}
-			time.Sleep(500 * time.Millisecond)
 			pid = 0
 		}
 	}
@@ -198,6 +197,23 @@ func (h *HDFSService) startDataNode() error {
 	return nil
 }
 
+func (h *HDFSService) stopStaleDaemon(name string, pid int, foundByPIDFile bool) error {
+	if foundByPIDFile {
+		if err := h.procMgr.Stop(name); err != nil {
+			return fmt.Errorf("failed to stop stale HDFS %s via PID file: %w", name, err)
+		}
+		if err := terminateHDFSPID(pid); err != nil {
+			return fmt.Errorf("failed to stop stale HDFS %s pid %d after PID-file SIGTERM: %w", name, pid, err)
+		}
+		return nil
+	}
+
+	if err := terminateHDFSPID(pid); err != nil {
+		return fmt.Errorf("failed to stop discovered HDFS %s pid %d before restart: %w", name, pid, err)
+	}
+	return nil
+}
+
 // Stop stops the HDFS NameNode and DataNode
 // Mirrors ld_hdfs_stop
 func (h *HDFSService) Stop() error {
@@ -223,13 +239,10 @@ func (h *HDFSService) Stop() error {
 		}
 
 		if pid, _ := findPID(); pid != 0 && IsProcessRunning(pid) {
-			proc, err := os.FindProcess(pid)
-			if err == nil {
-				if err := proc.Kill(); err != nil {
-					util.Warn("Failed to kill HDFS %s (pid %d): %v", svc, pid, err)
-				} else {
-					util.Success("Stopped HDFS %s (pid %d).", svc, pid)
-				}
+			if err := terminateHDFSPID(pid); err != nil {
+				util.Warn("Failed to stop HDFS %s (pid %d): %v", svc, pid, err)
+			} else {
+				util.Success("Stopped HDFS %s (pid %d).", svc, pid)
 			}
 		}
 	}
