@@ -39,8 +39,9 @@ func NewYARNService(paths *config.Paths) (*YARNService, error) {
 	}
 
 	procMgr := &service.ProcessManager{
-		PidDir: pidDir,
-		LogDir: logDir,
+		PidDir:      pidDir,
+		LogDir:      logDir,
+		ValidatePID: yarnPIDValidator(),
 	}
 
 	return &YARNService{
