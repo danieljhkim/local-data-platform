@@ -57,6 +57,10 @@ func TestSettingsApply_DBURLAndPasswordAndUser(t *testing.T) {
 	checkHive(filepath.Join(paths.UserProfilesDir(), "local", "hive", "hive-site.xml"))
 	checkHive(filepath.Join(paths.CurrentHiveConf(), "hive-site.xml"))
 	checkHive(filepath.Join(paths.CurrentSparkConf(), "hive-site.xml"))
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml"))
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.UserProfilesDir(), "local", "hive", "hive-site.xml"))
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.CurrentHiveConf(), "hive-site.xml"))
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.CurrentSparkConf(), "hive-site.xml"))
 }
 
 func TestSettingsApply_BaseDirIsFutureOnly(t *testing.T) {

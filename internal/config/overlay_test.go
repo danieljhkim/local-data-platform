@@ -171,6 +171,28 @@ func TestProfileManager_InitWithOptionsPreservedOnSet(t *testing.T) {
 	}
 }
 
+func TestProfileManager_InitWritesSensitiveFilesPrivate(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	baseDir := filepath.Join(tmpDir, "base")
+
+	paths := NewPaths(repoRoot, baseDir)
+	pm := NewProfileManager(paths)
+
+	if err := pm.Init(false, &generator.InitOptions{
+		User:       "daniel",
+		DBType:     "postgres",
+		DBUrl:      "jdbc:postgresql://localhost:5432/metastore",
+		DBPassword: "super-secret",
+	}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	assertNotGroupOrWorldReadable(t, NewSettingsManager(paths).Path())
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.UserProfilesDir(), "hdfs", "hive", "hive-site.xml"))
+	assertNotGroupOrWorldReadable(t, filepath.Join(paths.UserProfilesDir(), "local", "hive", "hive-site.xml"))
+}
+
 func TestProfileManager_Init_UsesPersistedSettingsWhenOptionsOmitted(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoRoot := filepath.Join(tmpDir, "repo")
@@ -447,6 +469,13 @@ func TestProfileManager_Apply(t *testing.T) {
 			if !util.FileExists(hiveConfig) {
 				t.Error("Hive config not created")
 			}
+			assertNotGroupOrWorldReadable(t, hiveConfig)
+
+			sparkHiveConfig := filepath.Join(currentConf, "spark", "hive-site.xml")
+			if !util.FileExists(sparkHiveConfig) {
+				t.Error("Spark hive-site.xml copy not created")
+			}
+			assertNotGroupOrWorldReadable(t, sparkHiveConfig)
 
 			// Verify profile marker
 			markerPath := filepath.Join(currentConf, ".profile")

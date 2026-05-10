@@ -93,6 +93,12 @@ func printFiles(out interface {
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", file, err)
 		}
+		if strings.HasSuffix(file, ".xml") {
+			data, _, err = util.RedactSensitiveHadoopXML(data)
+			if err != nil {
+				return fmt.Errorf("failed to redact sensitive values from %s: %w", file, err)
+			}
+		}
 
 		if _, err := fmt.Fprintf(out, "=== %s ===\n", file); err != nil {
 			return err

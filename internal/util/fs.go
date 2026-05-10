@@ -18,6 +18,20 @@ func MkdirAll(paths ...string) error {
 	return nil
 }
 
+// WriteFile writes a file and then explicitly applies permissions, including for existing files.
+func WriteFile(path string, data []byte, perm os.FileMode) error {
+	if perm == 0 {
+		perm = PublicFileMode
+	}
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, perm); err != nil {
+		return err
+	}
+	return nil
+}
+
 // CopyFile copies a file from src to dst
 // Creates parent directories if needed
 func CopyFile(src, dst string) error {
@@ -27,28 +41,19 @@ func CopyFile(src, dst string) error {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	// Open source file
-	srcFile, err := os.Open(src)
+	info, err := os.Stat(src)
 	if err != nil {
-		return fmt.Errorf("failed to open source file: %w", err)
+		return fmt.Errorf("failed to stat source file: %w", err)
 	}
-	defer srcFile.Close()
 
-	// Create destination file
-	dstFile, err := os.Create(dst)
+	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to create destination file: %w", err)
-	}
-	defer dstFile.Close()
-
-	// Copy contents
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return fmt.Errorf("failed to copy file: %w", err)
+		return fmt.Errorf("failed to read source file: %w", err)
 	}
 
-	// Sync to ensure write is complete
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
+	mode := fileModeForContent(data, info.Mode().Perm())
+	if err := WriteFile(dst, data, mode); err != nil {
+		return fmt.Errorf("failed to write destination file: %w", err)
 	}
 
 	return nil
