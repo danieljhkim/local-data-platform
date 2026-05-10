@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,10 +19,9 @@ import (
 
 // HiveService manages the Hive Metastore and HiveServer2 services
 type HiveService struct {
-	paths                 *config.Paths
-	env                   *env.Environment
-	procMgr               *service.ProcessManager
-	usesPostgresMetastore bool
+	paths   *config.Paths
+	env     *env.Environment
+	procMgr *service.ProcessManager
 }
 
 // NewHiveService creates a new Hive service manager
@@ -88,8 +88,7 @@ func (h *HiveService) Start() error {
 	return nil
 }
 
-// ensurePostgresJDBC ensures Postgres JDBC driver is available if needed
-// Also sets h.usesPostgresMetastore if Postgres is detected
+// ensurePostgresJDBC ensures Postgres JDBC driver is available if needed.
 func (h *HiveService) ensurePostgresJDBC() error {
 	dbType, _, err := h.detectMetastoreConfig()
 	if err != nil {
@@ -171,7 +170,7 @@ func (h *HiveService) Stop() error {
 
 		// Clean up PID file
 		pidFile := filepath.Join(h.procMgr.PidDir, svc+".pid")
-		os.Remove(pidFile)
+		removeFile(pidFile)
 	}
 
 	return nil
@@ -280,8 +279,8 @@ func (h *HiveService) cleanStaleDerbyLocks() {
 	}
 
 	util.Log("Removing stale Derby lock files from %s", dbPath)
-	os.Remove(filepath.Join(dbPath, "db.lck"))
-	os.Remove(filepath.Join(dbPath, "dbex.lck"))
+	removeFile(filepath.Join(dbPath, "db.lck"))
+	removeFile(filepath.Join(dbPath, "dbex.lck"))
 }
 
 // extractDerbyDBPath extracts the databaseName value from a Derby JDBC URL.
@@ -308,7 +307,9 @@ func (h *HiveService) waitForHiveServer2() error {
 	for i := 0; i < maxRetries; i++ {
 		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
 		if err == nil {
-			conn.Close()
+			if err := conn.Close(); err != nil {
+				return fmt.Errorf("failed to close HiveServer2 readiness connection: %w", err)
+			}
 			util.Success("HiveServer2 is ready.")
 			return nil
 		}
@@ -338,8 +339,10 @@ func (h *HiveService) getHS2Port() int {
 	if portStr == "" {
 		return 10000
 	}
-	port := 10000
-	fmt.Sscanf(portStr, "%d", &port)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 10000
+	}
 	return port
 }
 
@@ -361,7 +364,9 @@ func (h *HiveService) Logs() error {
 		if _, err := os.Stat(logFile); err == nil {
 			cmd := exec.Command("tail", "-n", "120", logFile)
 			cmd.Stdout = os.Stdout
-			cmd.Run()
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to tail Hive log %s: %w", logFile, err)
+			}
 		} else {
 			fmt.Println("(missing)")
 		}

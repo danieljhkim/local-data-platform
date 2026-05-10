@@ -80,9 +80,12 @@ func IsDirEmpty(path string) (bool, error) {
 		}
 		return false, err
 	}
-	defer f.Close()
 
 	_, err = f.Readdirnames(1)
+	closeErr := f.Close()
+	if closeErr != nil {
+		return false, closeErr
+	}
 	if err == io.EOF {
 		return true, nil
 	}

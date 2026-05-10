@@ -45,10 +45,16 @@ func ForceStop(pidDir string) error {
 	}
 
 	// Cleanup any leftover PID files
-	os.Remove(filepath.Join(pidDir, "metastore.pid"))
-	os.Remove(filepath.Join(pidDir, "hiveserver2.pid"))
+	removeFile(filepath.Join(pidDir, "metastore.pid"))
+	removeFile(filepath.Join(pidDir, "hiveserver2.pid"))
 
 	return nil
+}
+
+func removeFile(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		util.Warn("Failed to remove %s: %v", path, err)
+	}
 }
 
 // stopViaPidFiles attempts to stop services using PID files
@@ -79,7 +85,7 @@ func stopViaPidFiles(pidDir string) {
 			}
 		}
 
-		os.Remove(pidFile)
+		removeFile(pidFile)
 	}
 }
 
@@ -173,7 +179,9 @@ func killIfHive(pid int, reason string) error {
 	// If still running, escalate to SIGKILL
 	if isProcessRunning(pid) {
 		util.Log("Escalating: kill -9 pid %d", pid)
-		process.Signal(syscall.SIGKILL)
+		if err := process.Signal(syscall.SIGKILL); err != nil {
+			return err
+		}
 	}
 
 	return nil

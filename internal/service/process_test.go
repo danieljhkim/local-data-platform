@@ -66,7 +66,9 @@ func TestProcessManager_Start_Success(t *testing.T) {
 	}
 
 	// Wait for process to exit
-	cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
 }
 
 func TestProcessManager_Stop_ByPID(t *testing.T) {
@@ -230,8 +232,11 @@ func TestProcessManager_Status_Running(t *testing.T) {
 	}
 
 	// Cleanup
-	pm.Stop(name)
-	cmd.Wait()
+	if err := pm.Stop(name); err != nil {
+		t.Fatalf("Stop() cleanup error = %v", err)
+	}
+	// The process is expected to exit because Stop sends SIGTERM.
+	_ = cmd.Wait()
 }
 
 func TestProcessManager_Status_TrimsPIDWhitespace(t *testing.T) {
@@ -310,8 +315,11 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	}
 
 	// Stop and check again
-	pm.Stop(name)
-	cmd.Wait()
+	if err := pm.Stop(name); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	// The process is expected to exit because Stop sends SIGTERM.
+	_ = cmd.Wait()
 
 	time.Sleep(100 * time.Millisecond)
 	if pm.IsRunning(name) {

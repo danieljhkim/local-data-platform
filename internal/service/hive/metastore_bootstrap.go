@@ -67,7 +67,6 @@ func (h *HiveService) detectMetastoreConfig() (metastore.DBType, string, error) 
 		dbURL = metastore.DefaultDBURL(dbType)
 	}
 
-	h.usesPostgresMetastore = dbType == metastore.Postgres
 	return dbType, dbURL, nil
 }
 
@@ -102,7 +101,9 @@ func (h *HiveService) ensureDatabaseExists(dbType metastore.DBType, dbURL string
 			return nil
 		}
 
-		fmt.Fprintf(errOut, "WARNING: %s metastore database not found for URL: %s\n", dbType, dbURL)
+		if _, err := fmt.Fprintf(errOut, "WARNING: %s metastore database not found for URL: %s\n", dbType, dbURL); err != nil {
+			return err
+		}
 		create, err := confirmYesNo(in, out, "Create metastore database now? [y/N]: ")
 		if err != nil {
 			return err
@@ -117,7 +118,9 @@ func (h *HiveService) ensureDatabaseExists(dbType metastore.DBType, dbURL string
 }
 
 func confirmYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
-	fmt.Fprint(out, prompt)
+	if _, err := fmt.Fprint(out, prompt); err != nil {
+		return false, err
+	}
 	reader := bufio.NewReader(in)
 	line, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {

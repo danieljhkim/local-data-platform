@@ -45,8 +45,12 @@ Defaults to Derby metastore for zero-setup local usage.`,
 			sm := config.NewSettingsManager(paths)
 
 			if pm.IsInitialized() && !force {
-				fmt.Fprintf(cmd.ErrOrStderr(), "==> Profiles already initialized: %s\n", paths.UserProfilesDir())
-				fmt.Fprintln(cmd.ErrOrStderr(), "==>   (use: local-data init --force to overwrite)")
+				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "==> Profiles already initialized: %s\n", paths.UserProfilesDir()); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "==>   (use: local-data init --force to overwrite)"); err != nil {
+					return err
+				}
 				return nil
 			}
 
@@ -99,19 +103,25 @@ Defaults to Derby metastore for zero-setup local usage.`,
 			}
 
 			if err := metastore.ValidateURL(dbTypeNormalized, opts.DBUrl); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err)
+				if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err); writeErr != nil {
+					return writeErr
+				}
 				return fmt.Errorf("db-type and db-url must match")
 			}
 
 			if err := pm.Init(force, opts); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nProfiles directory: %s\n", paths.UserProfilesDir())
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "\nProfiles directory: %s\n", paths.UserProfilesDir()); err != nil {
+				return err
+			}
 
 			if err := runMetastoreBootstrap(paths, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Metastore bootstrap completed.")
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Metastore bootstrap completed."); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -130,8 +140,12 @@ func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string, 
 	if len(displayValue) > 0 {
 		display = displayValue[0]
 	}
-	fmt.Fprintf(out, "confirm %s to be: %s\n", key, display)
-	fmt.Fprint(out, "Press Enter to confirm, or type a new value: ")
+	if _, err := fmt.Fprintf(out, "confirm %s to be: %s\n", key, display); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprint(out, "Press Enter to confirm, or type a new value: "); err != nil {
+		return "", err
+	}
 
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {

@@ -6,11 +6,25 @@ import (
 	"testing"
 )
 
+func writeTestFile(t *testing.T, path string, data []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, data, perm); err != nil {
+		t.Fatalf("failed to write test file %s: %v", path, err)
+	}
+}
+
+func mkdirTestDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatalf("failed to create test dir %s: %v", path, err)
+	}
+}
+
 func TestFileExists(t *testing.T) {
 	// Create temp file for testing
 	tmpDir := t.TempDir()
 	existingFile := filepath.Join(tmpDir, "exists.txt")
-	os.WriteFile(existingFile, []byte("test"), 0644)
+	writeTestFile(t, existingFile, []byte("test"), 0644)
 
 	tests := []struct {
 		name     string
@@ -58,7 +72,7 @@ func TestCopyFile(t *testing.T) {
 			name: "copy regular file",
 			setupSrc: func() string {
 				src := filepath.Join(tmpDir, "source.txt")
-				os.WriteFile(src, []byte("hello world"), 0644)
+				writeTestFile(t, src, []byte("hello world"), 0644)
 				return src
 			},
 			dst:         filepath.Join(tmpDir, "dest1.txt"),
@@ -77,7 +91,7 @@ func TestCopyFile(t *testing.T) {
 			name: "copy file (permissions not preserved)",
 			setupSrc: func() string {
 				src := filepath.Join(tmpDir, "source_perm.txt")
-				os.WriteFile(src, []byte("test"), 0755)
+				writeTestFile(t, src, []byte("test"), 0755)
 				return src
 			},
 			dst:         filepath.Join(tmpDir, "dest2.txt"),
@@ -104,9 +118,9 @@ func TestCopyFile(t *testing.T) {
 			name: "destination already exists (overwrite)",
 			setupSrc: func() string {
 				src := filepath.Join(tmpDir, "source_overwrite.txt")
-				os.WriteFile(src, []byte("new content"), 0644)
+				writeTestFile(t, src, []byte("new content"), 0644)
 				dst := filepath.Join(tmpDir, "dest4.txt")
-				os.WriteFile(dst, []byte("old content"), 0644)
+				writeTestFile(t, dst, []byte("old content"), 0644)
 				return src
 			},
 			dst:         filepath.Join(tmpDir, "dest4.txt"),
@@ -177,7 +191,7 @@ func TestIsDirEmpty(t *testing.T) {
 			name: "empty directory",
 			setup: func() string {
 				dir := filepath.Join(tmpDir, "empty")
-				os.MkdirAll(dir, 0755)
+				mkdirTestDir(t, dir)
 				return dir
 			},
 			expected:    true,
@@ -187,8 +201,8 @@ func TestIsDirEmpty(t *testing.T) {
 			name: "directory with files",
 			setup: func() string {
 				dir := filepath.Join(tmpDir, "withfiles")
-				os.MkdirAll(dir, 0755)
-				os.WriteFile(filepath.Join(dir, "file.txt"), []byte("test"), 0644)
+				mkdirTestDir(t, dir)
+				writeTestFile(t, filepath.Join(dir, "file.txt"), []byte("test"), 0644)
 				return dir
 			},
 			expected:    false,
@@ -198,8 +212,8 @@ func TestIsDirEmpty(t *testing.T) {
 			name: "directory with hidden files",
 			setup: func() string {
 				dir := filepath.Join(tmpDir, "withhidden")
-				os.MkdirAll(dir, 0755)
-				os.WriteFile(filepath.Join(dir, ".hidden"), []byte("test"), 0644)
+				mkdirTestDir(t, dir)
+				writeTestFile(t, filepath.Join(dir, ".hidden"), []byte("test"), 0644)
 				return dir
 			},
 			expected:    false,

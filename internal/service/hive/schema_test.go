@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/metastore"
 )
 
-func TestHiveService_IsPostgresMetastore(t *testing.T) {
+func TestHiveService_DetectMetastoreConfig(t *testing.T) {
 	tests := []struct {
 		name     string
 		hiveConf string
-		expected bool
+		expected metastore.DBType
 	}{
 		{
 			name: "postgres metastore",
@@ -27,7 +28,7 @@ func TestHiveService_IsPostgresMetastore(t *testing.T) {
     <value>org.postgresql.Driver</value>
   </property>
 </configuration>`,
-			expected: true,
+			expected: metastore.Postgres,
 		},
 		{
 			name: "derby metastore",
@@ -46,14 +47,14 @@ func TestHiveService_IsPostgresMetastore(t *testing.T) {
     <value>APP</value>
   </property>
 </configuration>`,
-			expected: false,
+			expected: metastore.Derby,
 		},
 		{
 			name: "empty config",
 			hiveConf: `<?xml version="1.0"?>
 <configuration>
 </configuration>`,
-			expected: false,
+			expected: metastore.Derby,
 		},
 	}
 
@@ -87,12 +88,13 @@ func TestHiveService_IsPostgresMetastore(t *testing.T) {
 				t.Fatalf("Failed to write hive-site.xml: %v", err)
 			}
 
-			// Reset the flag and run ensurePostgresJDBC to test detection
-			service.usesPostgresMetastore = false
-			service.ensurePostgresJDBC()
+			dbType, _, err := service.detectMetastoreConfig()
+			if err != nil {
+				t.Fatalf("detectMetastoreConfig() error = %v", err)
+			}
 
-			if service.usesPostgresMetastore != tt.expected {
-				t.Errorf("usesPostgresMetastore = %v, want %v", service.usesPostgresMetastore, tt.expected)
+			if dbType != tt.expected {
+				t.Errorf("detectMetastoreConfig() dbType = %v, want %v", dbType, tt.expected)
 			}
 		})
 	}
@@ -141,10 +143,6 @@ func TestHiveService_EnsureMetastoreSchema_NotPostgres(t *testing.T) {
 		t.Fatalf("Failed to write hive-site.xml: %v", err)
 	}
 
-	// Reset and run ensurePostgresJDBC to set the flag correctly
-	service.usesPostgresMetastore = false
-	service.ensurePostgresJDBC()
-
 	// ensureMetastoreSchema should return nil immediately for non-Postgres metastore
 	err = service.ensureMetastoreSchema()
 	if err != nil {
@@ -171,8 +169,24 @@ func TestHiveService_EnsureMetastoreSchema_PostgresNoSchematool(t *testing.T) {
 		t.Fatalf("NewHiveService() error = %v", err)
 	}
 
-	// Manually set the flag to test the schema check with Postgres
-	service.usesPostgresMetastore = true
+	postgresConfig := `<?xml version="1.0"?>
+<configuration>
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:postgresql://localhost:5432/metastore</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>org.postgresql.Driver</value>
+  </property>
+</configuration>`
+	overlayHiveDir := filepath.Join(baseDir, "conf", "current", "hive")
+	if err := os.MkdirAll(overlayHiveDir, 0755); err != nil {
+		t.Fatalf("Failed to create overlay hive dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlayHiveDir, "hive-site.xml"), []byte(postgresConfig), 0644); err != nil {
+		t.Fatalf("Failed to write hive-site.xml: %v", err)
+	}
 
 	// ensureMetastoreSchema should not return an error when schematool fails
 	// (it logs a warning and continues)

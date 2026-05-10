@@ -47,9 +47,13 @@ func TestProfileManager_Init(t *testing.T) {
 			// Pre-create user profiles if needed
 			userProfiles := filepath.Join(baseDir, "conf", "profiles")
 			if tt.preExist {
-				util.MkdirAll(userProfiles)
+				if err := util.MkdirAll(userProfiles); err != nil {
+					t.Fatalf("failed to create user profiles dir: %v", err)
+				}
 				// Create a marker file to verify overwrite behavior
-				os.WriteFile(filepath.Join(userProfiles, "marker.txt"), []byte("old"), 0644)
+				if err := os.WriteFile(filepath.Join(userProfiles, "marker.txt"), []byte("old"), 0644); err != nil {
+					t.Fatalf("failed to write marker file: %v", err)
+				}
 			}
 
 			// Create paths and profile manager
@@ -548,16 +552,24 @@ func TestProfileManager_Check(t *testing.T) {
 
 				// Create required Hive config
 				hiveDir := filepath.Join(currentConf, "hive")
-				util.MkdirAll(hiveDir)
-				os.WriteFile(filepath.Join(hiveDir, "hive-site.xml"), []byte("<configuration></configuration>"), 0644)
+				if err := util.MkdirAll(hiveDir); err != nil {
+					t.Fatalf("failed to create hive config dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(hiveDir, "hive-site.xml"), []byte("<configuration></configuration>"), 0644); err != nil {
+					t.Fatalf("failed to write hive-site.xml: %v", err)
+				}
 
 				// Optionally create Hadoop configs
 				if tt.includeHadoop {
 					hadoopDir := filepath.Join(currentConf, "hadoop")
-					util.MkdirAll(hadoopDir)
+					if err := util.MkdirAll(hadoopDir); err != nil {
+						t.Fatalf("failed to create hadoop config dir: %v", err)
+					}
 					hadoopConfigs := []string{"core-site.xml", "hdfs-site.xml", "mapred-site.xml", "yarn-site.xml"}
 					for _, config := range hadoopConfigs {
-						os.WriteFile(filepath.Join(hadoopDir, config), []byte("<configuration></configuration>"), 0644)
+						if err := os.WriteFile(filepath.Join(hadoopDir, config), []byte("<configuration></configuration>"), 0644); err != nil {
+							t.Fatalf("failed to write %s: %v", config, err)
+						}
 					}
 				}
 			}

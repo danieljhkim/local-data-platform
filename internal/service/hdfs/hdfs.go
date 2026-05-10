@@ -225,8 +225,11 @@ func (h *HDFSService) Stop() error {
 		if pid, _ := findPID(); pid != 0 && IsProcessRunning(pid) {
 			proc, err := os.FindProcess(pid)
 			if err == nil {
-				proc.Kill()
-				util.Success("Stopped HDFS %s (pid %d).", svc, pid)
+				if err := proc.Kill(); err != nil {
+					util.Warn("Failed to kill HDFS %s (pid %d): %v", svc, pid, err)
+				} else {
+					util.Success("Stopped HDFS %s (pid %d).", svc, pid)
+				}
 			}
 		}
 	}

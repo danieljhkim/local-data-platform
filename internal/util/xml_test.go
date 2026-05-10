@@ -156,7 +156,9 @@ func TestGetProperty(t *testing.T) {
 </configuration>`
 
 	xmlFile := filepath.Join(tmpDir, "test.xml")
-	os.WriteFile(xmlFile, []byte(xmlContent), 0644)
+	if err := os.WriteFile(xmlFile, []byte(xmlContent), 0644); err != nil {
+		t.Fatalf("Failed to write test XML: %v", err)
+	}
 
 	config, err := ParseHadoopXML(xmlFile)
 	if err != nil {
@@ -283,7 +285,9 @@ func TestParseNameNodeDirs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Write XML to temp file (use index to avoid spaces/slashes in directory name)
 			confDir := filepath.Join(tmpDir, fmt.Sprintf("test%d", i))
-			os.MkdirAll(confDir, 0755)
+			if err := os.MkdirAll(confDir, 0755); err != nil {
+				t.Fatalf("Failed to create test config dir: %v", err)
+			}
 			xmlFile := filepath.Join(confDir, "hdfs-site.xml")
 			err := os.WriteFile(xmlFile, []byte(tt.xmlContent), 0644)
 			if err != nil {
