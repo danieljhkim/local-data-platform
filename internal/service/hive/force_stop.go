@@ -13,10 +13,11 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
-// ForceStop performs a force-stop of Hive services
-// First tries graceful stop via PID files, then kills listeners on ports 9083 and 10000
-func ForceStop(pidDir string) error {
-	util.Log("Force-stopping Hive (pidfiles + listeners on 9083/10000)...")
+// ForceStop performs a force-stop of Hive services.
+// First tries graceful stop via PID files, then kills configured Hive listener ports.
+func ForceStop(pidDir string, ports ...int) error {
+	listenerPorts := forceStopListenerPorts(pidDir, ports...)
+	util.Log("Force-stopping Hive (pidfiles + listeners on %s)...", formatPorts(listenerPorts))
 
 	// First try graceful stop via PID files
 	stopViaPidFiles(pidDir)
@@ -27,10 +28,7 @@ func ForceStop(pidDir string) error {
 		return nil
 	}
 
-	// Kill listeners on Hive ports
-	ports := []int{9083, 10000} // metastore, hiveserver2
-
-	for _, port := range ports {
+	for _, port := range listenerPorts {
 		pids, err := findListeners(port)
 		if err != nil {
 			util.Warn("Failed to find listeners on port %d: %v", port, err)
@@ -49,6 +47,43 @@ func ForceStop(pidDir string) error {
 	removeFile(filepath.Join(pidDir, "hiveserver2.pid"))
 
 	return nil
+}
+
+func forceStopListenerPorts(pidDir string, ports ...int) []int {
+	if len(ports) > 0 {
+		return normalizePorts(ports)
+	}
+
+	baseDir := filepath.Dir(filepath.Dir(filepath.Dir(pidDir)))
+	hiveSite := filepath.Join(baseDir, "conf", "current", "hive", "hive-site.xml")
+	return normalizePorts(readHiveListenerPorts(hiveSite).slice())
+}
+
+func normalizePorts(ports []int) []int {
+	seen := make(map[int]bool)
+	result := make([]int, 0, len(ports))
+
+	for _, port := range ports {
+		if port <= 0 || port > 65535 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		result = append(result, port)
+	}
+
+	if len(result) == 0 {
+		return defaultHivePorts().slice()
+	}
+
+	return result
+}
+
+func formatPorts(ports []int) string {
+	parts := make([]string, 0, len(ports))
+	for _, port := range ports {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	return strings.Join(parts, "/")
 }
 
 func removeFile(path string) {
