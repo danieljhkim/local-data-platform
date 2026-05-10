@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -178,7 +177,8 @@ func (h *HiveService) Stop() error {
 
 // StopForce performs a force-stop of Hive services
 func (h *HiveService) StopForce() error {
-	return ForceStop(h.procMgr.PidDir)
+	ports := h.listenerPorts()
+	return ForceStop(h.procMgr.PidDir, ports.slice()...)
 }
 
 // ListenerStatus represents the status of a Hive listener port
@@ -212,16 +212,17 @@ func (h *HiveService) Status() ([]service.ServiceStatus, error) {
 
 // ListenerStatuses returns the listener status for Hive ports
 func (h *HiveService) ListenerStatuses() []ListenerStatus {
+	ports := h.listenerPorts()
 	if _, err := exec.LookPath("lsof"); err != nil {
 		return []ListenerStatus{
-			{Label: "metastore", Port: 9083},
-			{Label: "hiveserver2", Port: 10000},
+			{Label: "metastore", Port: ports.Metastore},
+			{Label: "hiveserver2", Port: ports.HiveServer2},
 		}
 	}
 
 	return []ListenerStatus{
-		h.checkListener(9083, "metastore"),
-		h.checkListener(10000, "hiveserver2"),
+		h.checkListener(ports.Metastore, "metastore"),
+		h.checkListener(ports.HiveServer2, "hiveserver2"),
 	}
 }
 
@@ -330,20 +331,7 @@ func (h *HiveService) waitForHiveServer2() error {
 // getHS2Port reads the HiveServer2 thrift port from the active hive-site.xml.
 // Falls back to 10000 if not configured.
 func (h *HiveService) getHS2Port() int {
-	hiveSite := filepath.Join(h.env.HiveConfDir, "hive-site.xml")
-	cfg, err := util.ParseHadoopXML(hiveSite)
-	if err != nil {
-		return 10000
-	}
-	portStr := strings.TrimSpace(cfg.GetProperty("hive.server2.thrift.port"))
-	if portStr == "" {
-		return 10000
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return 10000
-	}
-	return port
+	return h.listenerPorts().HiveServer2
 }
 
 // Logs displays Hive service logs
