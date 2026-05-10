@@ -6,3 +6,5 @@
 /.box/state/**
 /.box/env/.env.local
 
+.orbit
+raw

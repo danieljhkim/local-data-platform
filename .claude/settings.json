@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_orbit_orbit__orbit_task_add",
+      "mcp__plugin_orbit_orbit__orbit_task_approve",
+      "mcp__plugin_orbit_orbit__orbit_task_artifact_put",
+      "mcp__plugin_orbit_orbit__orbit_task_delete",
+      "mcp__plugin_orbit_orbit__orbit_task_lint",
+      "mcp__plugin_orbit_orbit__orbit_task_list",
+      "mcp__plugin_orbit_orbit__orbit_task_search",
+      "mcp__plugin_orbit_orbit__orbit_task_locks",
+      "mcp__plugin_orbit_orbit__orbit_task_locks_release",
+      "mcp__plugin_orbit_orbit__orbit_task_locks_reserve",
+      "mcp__plugin_orbit_orbit__orbit_task_reject",
+      "mcp__plugin_orbit_orbit__orbit_task_review_thread_add",
+      "mcp__plugin_orbit_orbit__orbit_task_review_thread_list",
+      "mcp__plugin_orbit_orbit__orbit_task_review_thread_reply",
+      "mcp__plugin_orbit_orbit__orbit_task_review_thread_resolve",
+      "mcp__plugin_orbit_orbit__orbit_task_show",
+      "mcp__plugin_orbit_orbit__orbit_task_start",
+      "mcp__plugin_orbit_orbit__orbit_task_update",
+      "mcp__plugin_orbit_orbit__orbit_friction_add",
+      "mcp__plugin_orbit_orbit__orbit_friction_list",
+      "mcp__plugin_orbit_orbit__orbit_friction_show",
+      "mcp__plugin_orbit_orbit__orbit_friction_stats",
+      "mcp__plugin_orbit_orbit__orbit_graph_callers",
+      "mcp__plugin_orbit_orbit__orbit_graph_deps",
+      "mcp__plugin_orbit_orbit__orbit_graph_history",
+      "mcp__plugin_orbit_orbit__orbit_graph_implementors",
+      "mcp__plugin_orbit_orbit__orbit_graph_overview",
+      "mcp__plugin_orbit_orbit__orbit_graph_pack",
+      "mcp__plugin_orbit_orbit__orbit_graph_refs",
+      "mcp__plugin_orbit_orbit__orbit_graph_search",
+      "mcp__plugin_orbit_orbit__orbit_graph_show",
+      "mcp__plugin_orbit_orbit__orbit_semantic_search",
+      "mcp__plugin_orbit_orbit__orbit_semantic_related"
+    ]
+  }
+}
