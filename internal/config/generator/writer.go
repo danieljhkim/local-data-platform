@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/config/schema"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 // hadoopXMLConfig represents Hadoop-style XML configuration
@@ -49,11 +50,20 @@ func WriteHadoopXML(props []schema.Property, path string) error {
 	output := []byte(xml.Header + string(data) + "\n")
 
 	// Write file
-	if err := os.WriteFile(path, output, 0644); err != nil {
+	if err := util.WriteFile(path, output, hadoopXMLFileMode(props)); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
 	return nil
+}
+
+func hadoopXMLFileMode(props []schema.Property) os.FileMode {
+	for _, prop := range props {
+		if util.IsSensitivePropertyName(prop.Name) {
+			return util.PrivateFileMode
+		}
+	}
+	return util.PublicFileMode
 }
 
 // WriteSparkConf writes properties to a Spark .conf file (key=value format)
@@ -88,7 +98,7 @@ func WriteSparkConf(props []schema.Property, path string) error {
 
 	// Write file
 	content := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := util.WriteFile(path, []byte(content), util.PublicFileMode); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 

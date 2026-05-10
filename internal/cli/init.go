@@ -11,6 +11,7 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/config/generator"
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -92,7 +93,7 @@ Defaults to Derby metastore for zero-setup local usage.`,
 			if err != nil {
 				return err
 			}
-			opts.DBPassword, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-password", opts.DBPassword)
+			opts.DBPassword, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-password", opts.DBPassword, maskedInitValue(opts.DBPassword))
 			if err != nil {
 				return err
 			}
@@ -124,8 +125,12 @@ Defaults to Derby metastore for zero-setup local usage.`,
 	return cmd
 }
 
-func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string) (string, error) {
-	fmt.Fprintf(out, "confirm %s to be: %s\n", key, current)
+func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string, displayValue ...string) (string, error) {
+	display := current
+	if len(displayValue) > 0 {
+		display = displayValue[0]
+	}
+	fmt.Fprintf(out, "confirm %s to be: %s\n", key, display)
 	fmt.Fprint(out, "Press Enter to confirm, or type a new value: ")
 
 	line, err := reader.ReadString('\n')
@@ -138,4 +143,11 @@ func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string) 
 		return value, nil
 	}
 	return current, nil
+}
+
+func maskedInitValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return util.RedactedValue
 }

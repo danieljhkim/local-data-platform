@@ -139,6 +139,31 @@ func TestCopyFile(t *testing.T) {
 	}
 }
 
+func TestCopyFile_SensitiveHadoopXMLIsPrivate(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "hive-site.xml")
+	dst := filepath.Join(tmpDir, "spark", "hive-site.xml")
+	content := `<configuration>
+  <property><name>javax.jdo.option.ConnectionPassword</name><value>secret</value></property>
+</configuration>
+`
+	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	if err := CopyFile(src, dst); err != nil {
+		t.Fatalf("CopyFile() error: %v", err)
+	}
+
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("stat destination: %v", err)
+	}
+	if got := info.Mode().Perm(); got&0077 != 0 {
+		t.Fatalf("destination mode = %v, should not be group- or world-readable", got)
+	}
+}
+
 func TestIsDirEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 

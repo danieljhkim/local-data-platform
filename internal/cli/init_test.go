@@ -85,6 +85,74 @@ func TestInit_ConfirmationAllowsEditingValues(t *testing.T) {
 	}
 }
 
+func TestInit_DBPasswordConfirmationRedactsAndAllowsKeepOrReplace(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantPassword string
+	}{
+		{
+			name:         "enter keeps current password",
+			input:        "\n\n\n\n",
+			wantPassword: "existing-secret",
+		},
+		{
+			name:         "typed value replaces current password",
+			input:        "\n\n\nreplacement-secret\n",
+			wantPassword: "replacement-secret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseDir := t.TempDir()
+			paths := config.NewPaths("", baseDir)
+			sm := config.NewSettingsManager(paths)
+			if err := sm.Save(&config.Settings{
+				User:       "daniel",
+				DBType:     "postgres",
+				DBURL:      "jdbc:postgresql://localhost:5432/metastore",
+				DBPassword: "existing-secret",
+			}); err != nil {
+				t.Fatalf("save settings: %v", err)
+			}
+
+			orig := runMetastoreBootstrap
+			runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+				return nil
+			}
+			defer func() { runMetastoreBootstrap = orig }()
+
+			cmd := newInitCmd(func() *config.Paths { return paths })
+			out := &bytes.Buffer{}
+			errBuf := &bytes.Buffer{}
+			cmd.SetOut(out)
+			cmd.SetErr(errBuf)
+			cmd.SetIn(strings.NewReader(tt.input))
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("init returned error: %v", err)
+			}
+
+			output := out.String()
+			if strings.Contains(output, "existing-secret") || strings.Contains(output, "replacement-secret") {
+				t.Fatalf("db-password confirmation leaked a password:\n%s", output)
+			}
+			if !strings.Contains(output, "confirm db-password to be: ********") {
+				t.Fatalf("missing redacted db-password confirmation:\n%s", output)
+			}
+
+			settings, err := sm.Load()
+			if err != nil {
+				t.Fatalf("load settings: %v", err)
+			}
+			if settings.DBPassword != tt.wantPassword {
+				t.Fatalf("DBPassword = %q, want %q", settings.DBPassword, tt.wantPassword)
+			}
+		})
+	}
+}
+
 func TestInit_AlreadyInitializedWithoutForceReturnsWithoutConfirmations(t *testing.T) {
 	baseDir := t.TempDir()
 	paths := config.NewPaths("", baseDir)

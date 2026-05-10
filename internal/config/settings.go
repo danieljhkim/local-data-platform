@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 const defaultDBPassword = "password"
@@ -76,7 +77,7 @@ func (sm *SettingsManager) Save(settings *Settings) error {
 		return fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
-	if err := os.WriteFile(sm.Path(), append(data, '\n'), 0644); err != nil {
+	if err := util.WriteFile(sm.Path(), append(data, '\n'), util.PrivateFileMode); err != nil {
 		return err
 	}
 

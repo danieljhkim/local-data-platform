@@ -71,7 +71,7 @@ func (c *HadoopConfiguration) WriteXML(path string) error {
 	// Add XML header
 	xmlData := []byte(xml.Header + string(data) + "\n")
 
-	if err := os.WriteFile(path, xmlData, 0644); err != nil {
+	if err := WriteFile(path, xmlData, c.fileMode()); err != nil {
 		return fmt.Errorf("failed to write XML file: %w", err)
 	}
 

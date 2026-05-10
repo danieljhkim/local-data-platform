@@ -131,7 +131,7 @@ func TestSettingSet_BaseDirIsNotEditable(t *testing.T) {
 	}
 }
 
-func TestSettingShow_Hive_PrintsActiveConfig(t *testing.T) {
+func TestSettingShow_Hive_RedactsConnectionPassword(t *testing.T) {
 	baseDir := t.TempDir()
 	paths := config.NewPaths("", baseDir)
 
@@ -140,7 +140,11 @@ func TestSettingShow_Hive_PrintsActiveConfig(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	hivePath := filepath.Join(hiveConfDir, "hive-site.xml")
-	content := "<configuration><property><name>x</name><value>1</value></property></configuration>\n"
+	content := `<configuration>
+  <property><name>x</name><value>1</value></property>
+  <property><name>javax.jdo.option.ConnectionPassword</name><value>super-secret</value></property>
+</configuration>
+`
 	if err := os.WriteFile(hivePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -156,12 +160,18 @@ func TestSettingShow_Hive_PrintsActiveConfig(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, content) {
-		t.Fatalf("expected hive config content in output:\n%s", out)
+	if strings.Contains(out, "super-secret") {
+		t.Fatalf("hive config output leaked password:\n%s", out)
+	}
+	if !strings.Contains(out, "<name>javax.jdo.option.ConnectionPassword</name>") || !strings.Contains(out, "<value>********</value>") {
+		t.Fatalf("expected redacted password in output:\n%s", out)
+	}
+	if !strings.Contains(out, "<name>x</name>") || !strings.Contains(out, "<value>1</value>") {
+		t.Fatalf("expected non-sensitive property in output:\n%s", out)
 	}
 }
 
-func TestSettingShow_Spark_PrintsSparkDefaultsAndHiveSite(t *testing.T) {
+func TestSettingShow_Spark_RedactsCopiedHiveSite(t *testing.T) {
 	baseDir := t.TempDir()
 	paths := config.NewPaths("", baseDir)
 
@@ -175,7 +185,11 @@ func TestSettingShow_Spark_PrintsSparkDefaultsAndHiveSite(t *testing.T) {
 		t.Fatalf("write spark-defaults: %v", err)
 	}
 	sparkHivePath := filepath.Join(sparkConfDir, "hive-site.xml")
-	sparkHive := "<configuration><property><name>hive.metastore.uris</name><value>thrift://localhost:9083</value></property></configuration>\n"
+	sparkHive := `<configuration>
+  <property><name>hive.metastore.uris</name><value>thrift://localhost:9083</value></property>
+  <property><name>javax.jdo.option.ConnectionPassword</name><value>spark-secret</value></property>
+</configuration>
+`
 	if err := os.WriteFile(sparkHivePath, []byte(sparkHive), 0644); err != nil {
 		t.Fatalf("write hive-site: %v", err)
 	}
@@ -194,7 +208,13 @@ func TestSettingShow_Spark_PrintsSparkDefaultsAndHiveSite(t *testing.T) {
 	if !strings.Contains(out, sparkDefaults) {
 		t.Fatalf("expected spark-defaults content in output:\n%s", out)
 	}
-	if !strings.Contains(out, sparkHive) {
-		t.Fatalf("expected spark hive-site content in output:\n%s", out)
+	if strings.Contains(out, "spark-secret") {
+		t.Fatalf("spark config output leaked password:\n%s", out)
+	}
+	if !strings.Contains(out, "<name>javax.jdo.option.ConnectionPassword</name>") || !strings.Contains(out, "<value>********</value>") {
+		t.Fatalf("expected redacted password in output:\n%s", out)
+	}
+	if !strings.Contains(out, "<name>hive.metastore.uris</name>") || !strings.Contains(out, "<value>thrift://localhost:9083</value>") {
+		t.Fatalf("expected non-sensitive hive-site property in output:\n%s", out)
 	}
 }

@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func assertNotGroupOrWorldReadable(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got&0077 != 0 {
+		t.Fatalf("%s mode = %v, should not be group- or world-readable", path, got)
+	}
+}
+
 func TestSettingsManager_Path(t *testing.T) {
 	baseDir := t.TempDir()
 	paths := NewPaths("/tmp/repo", baseDir)
@@ -66,6 +78,7 @@ func TestSettingsManager_SaveAndLoad(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(sm.Path())); err != nil {
 		t.Fatalf("settings parent dir should exist: %v", err)
 	}
+	assertNotGroupOrWorldReadable(t, sm.Path())
 
 	got, err := sm.Load()
 	if err != nil {
