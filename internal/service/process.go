@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -13,8 +14,9 @@ import (
 // ProcessManager handles process lifecycle management
 // Manages PID files, process start/stop, and status checking
 type ProcessManager struct {
-	PidDir string // Directory for PID files
-	LogDir string // Directory for log files
+	PidDir      string       // Directory for PID files
+	LogDir      string       // Directory for log files
+	ValidatePID PIDValidator // Optional ownership check before signaling PID-file processes
 }
 
 // NewProcessManager creates a new process manager
@@ -88,13 +90,19 @@ func (pm *ProcessManager) Stop(name string) error {
 		return fmt.Errorf("failed to read PID file: %w", err)
 	}
 
-	pid, err := strconv.Atoi(string(data))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		return fmt.Errorf("invalid PID in file: %w", err)
 	}
 
 	// Send SIGTERM
 	if isProcessRunning(pid) {
+		if pm.ValidatePID != nil {
+			if err := pm.ValidatePID(name, pid); err != nil {
+				return err
+			}
+		}
+
 		process, err := os.FindProcess(pid)
 		if err != nil {
 			return fmt.Errorf("failed to find process: %w", err)
@@ -131,7 +139,7 @@ func (pm *ProcessManager) Status(name string) (int, error) {
 		return 0, fmt.Errorf("failed to read PID file: %w", err)
 	}
 
-	pid, err := strconv.Atoi(string(data))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		return 0, fmt.Errorf("invalid PID in file: %w", err)
 	}

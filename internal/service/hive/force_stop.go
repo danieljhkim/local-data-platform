@@ -54,6 +54,7 @@ func ForceStop(pidDir string) error {
 // stopViaPidFiles attempts to stop services using PID files
 func stopViaPidFiles(pidDir string) {
 	services := []string{"hiveserver2", "metastore"}
+	validate := hivePIDValidator()
 
 	for _, svc := range services {
 		pidFile := filepath.Join(pidDir, svc+".pid")
@@ -69,8 +70,13 @@ func stopViaPidFiles(pidDir string) {
 		}
 
 		if isProcessRunning(pid) {
-			killProcess(pid)
-			util.Success("Stopped Hive %s (pid %d).", svc, pid)
+			if err := validate(svc, pid); err != nil {
+				util.Warn("Skipping Hive %s PID file stop: %v", svc, err)
+			} else if err := killIfHive(pid, fmt.Sprintf("PID file %s", svc)); err != nil {
+				util.Warn("Failed to kill Hive %s from PID file: %v", svc, err)
+			} else {
+				util.Success("Stopped Hive %s (pid %d).", svc, pid)
+			}
 		}
 
 		os.Remove(pidFile)
@@ -182,16 +188,6 @@ func isProcessRunning(pid int) bool {
 
 	err = process.Signal(syscall.Signal(0))
 	return err == nil
-}
-
-// killProcess sends SIGTERM to a process
-func killProcess(pid int) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-
-	return process.Signal(syscall.SIGTERM)
 }
 
 // uniquePids returns unique PIDs from a slice

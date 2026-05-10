@@ -34,6 +34,7 @@ func NewHDFSService(paths *config.Paths) (*HDFSService, error) {
 
 	// Create process manager
 	procMgr := service.NewProcessManager(hdfsPaths.PidsDir, hdfsPaths.LogsDir)
+	procMgr.ValidatePID = hdfsPIDValidator()
 
 	return &HDFSService{
 		paths:   paths,
@@ -118,7 +119,9 @@ func (h *HDFSService) startNameNode() error {
 	if pid != 0 {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS NameNode running but not using current overlay config; restarting (pid %d).", pid)
-			h.procMgr.Stop("namenode")
+			if err := h.procMgr.Stop("namenode"); err != nil {
+				util.Warn("Failed to stop HDFS namenode: %v", err)
+			}
 			time.Sleep(500 * time.Millisecond)
 			pid = 0
 		}
@@ -162,7 +165,9 @@ func (h *HDFSService) startDataNode() error {
 	if pid != 0 {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS DataNode running but not using current overlay config; restarting (pid %d).", pid)
-			h.procMgr.Stop("datanode")
+			if err := h.procMgr.Stop("datanode"); err != nil {
+				util.Warn("Failed to stop HDFS datanode: %v", err)
+			}
 			time.Sleep(500 * time.Millisecond)
 			pid = 0
 		}

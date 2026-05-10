@@ -41,8 +41,9 @@ func NewHiveService(paths *config.Paths) (*HiveService, error) {
 	}
 
 	procMgr := &service.ProcessManager{
-		PidDir: pidDir,
-		LogDir: logDir,
+		PidDir:      pidDir,
+		LogDir:      logDir,
+		ValidatePID: hivePIDValidator(),
 	}
 
 	return &HiveService{
