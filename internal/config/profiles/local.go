@@ -21,6 +21,8 @@ func LocalProfile() *Profile {
 				ThriftPort:           10000,
 				Authentication:       "NONE",
 				EnableDoAs:           false,
+				WebUIHost:            "127.0.0.1",
+				WebUIPort:            10002,
 				Extra: []schema.Property{
 					{Name: "hive.metastore.event.db.notification.api.auth", Value: "false"},
 					{Name: "hive.execution.engine", Value: "mr"},
