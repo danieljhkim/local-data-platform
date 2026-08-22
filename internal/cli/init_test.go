@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 func TestInit_ConfirmsEachMutableSetting(t *testing.T) {
@@ -215,4 +216,165 @@ func TestInit_RejectsDBTypeDBURLMismatch(t *testing.T) {
 	if !strings.Contains(errBuf.String(), "WARNING:") {
 		t.Fatalf("expected warning in stderr:\n%s", errBuf.String())
 	}
+}
+
+func TestInit_PasswordBearingURLIsRedacted(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	sm := config.NewSettingsManager(paths)
+	if err := sm.Save(&config.Settings{
+		User:       "daniel",
+		DBType:     "postgres",
+		DBURL:      "jdbc:postgresql://alice:" + secret + "@localhost:5432/metastore",
+		DBPassword: secret,
+	}); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\n\n\n\n"))
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("init leaked secret:\n%s", combined)
+	}
+	if !strings.Contains(out.String(), "confirm db-url to be: jdbc:postgresql://alice:********@localhost:5432/metastore") {
+		t.Fatalf("expected redacted db-url confirmation:\n%s", out.String())
+	}
+}
+
+func TestInit_DBPasswordFileDoesNotPlaceSecretOnArgv(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	pwFile := filepath.Join(baseDir, "pw")
+	if err := os.WriteFile(pwFile, []byte(secret+"\n"), 0600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://localhost:5432/metastore\n\n"))
+	cmd.SetArgs([]string{"--db-password-file", pwFile})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("init leaked secret:\n%s", combined)
+	}
+
+	settings, err := smLoad(t, paths)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestInit_DeprecatedDBPasswordFlagWarns(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://localhost:5432/metastore\n\n"))
+	cmd.SetArgs([]string{"--db-password", secret})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "deprecated") && !strings.Contains(errBuf.String(), "Deprecated") {
+		t.Fatalf("expected deprecation warning, got: %s", errBuf.String())
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Fatalf("stdout leaked secret:\n%s", out.String())
+	}
+
+	settings, err := smLoad(t, paths)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestInit_LocalDataDBPasswordEnv(t *testing.T) {
+	const secret = "s3cret-value"
+	t.Setenv(util.DBPasswordEnvVar, secret)
+
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://localhost:5432/metastore\n\n"))
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("init leaked secret:\n%s", combined)
+	}
+
+	settings, err := smLoad(t, paths)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func smLoad(t *testing.T, paths *config.Paths) (*config.Settings, error) {
+	t.Helper()
+	return config.NewSettingsManager(paths).Load()
 }

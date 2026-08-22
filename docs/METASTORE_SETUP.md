@@ -85,7 +85,7 @@ If the `CREATE DATABASE` fails because it already exists, that’s fine.
 ## 3) Verify connectivity
 
 ```bash
-psql "postgresql://daniel:password@localhost:5432/metastore" -c 'SELECT 1;'
+psql -h localhost -p 5432 -U daniel -d metastore -c 'SELECT 1;'
 ```
 
 You should see a single row with `1`.
@@ -95,7 +95,12 @@ You should see a single row with `1`.
 ## 4) Initialize local-data with Postgres metastore:
 
 ```bash
-local-data init --user daniel --db-type postgres --db-url "jdbc:postgresql://localhost:5432/metastore" --db-password "password"
+# Write the password to a mode-0600 file, then:
+local-data init --user daniel --db-type postgres \
+  --db-url "jdbc:postgresql://localhost:5432/metastore" \
+  --db-password-file "$HOME/.config/local-data/db-password"
+# or: LOCAL_DATA_DB_PASSWORD='...' local-data init --user daniel --db-type postgres \
+#       --db-url "jdbc:postgresql://localhost:5432/metastore"
 ```
 
 ---
