@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -14,11 +15,29 @@ const (
 	RedactedValue                              = "********"
 	PublicFileMode                 os.FileMode = 0644
 	PrivateFileMode                os.FileMode = 0600
+	// DBPasswordEnvVar is the secret-safe environment variable for the Hive metastore password.
+	DBPasswordEnvVar = "LOCAL_DATA_DB_PASSWORD"
+	// DeprecatedPasswordArgWarning is emitted when a password is supplied on argv.
+	DeprecatedPasswordArgWarning = "WARNING: passing db-password on the command line is deprecated; it exposes the secret in process listings and shell history. Use a prompt, --stdin, --from-file, --db-password-file, or LOCAL_DATA_DB_PASSWORD."
+)
+
+var (
+	jdbcUserinfoPasswordPattern = regexp.MustCompile(`(://[^:/?#@]*):([^@/]+)@`)
+	jdbcQueryPasswordPattern    = regexp.MustCompile(`(?i)([?&;](?:password|passwd|pwd)=)([^&;]*)`)
 )
 
 // IsSensitivePropertyName reports whether a Hadoop XML property should be treated as secret.
 func IsSensitivePropertyName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), HiveConnectionPasswordProperty)
+}
+
+// RedactJDBCURL masks password userinfo and password query parameters in JDBC (or JDBC-like) URLs.
+func RedactJDBCURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	s := jdbcUserinfoPasswordPattern.ReplaceAllString(raw, "${1}:"+RedactedValue+"@")
+	return jdbcQueryPasswordPattern.ReplaceAllString(s, "${1}"+RedactedValue)
 }
 
 // RedactSensitiveHadoopXML masks secret values in Hadoop-style XML while leaving non-secret properties visible.

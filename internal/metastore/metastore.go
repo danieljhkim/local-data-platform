@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 // DBType identifies the Hive metastore backing database.
@@ -95,11 +97,12 @@ func ConnectionUser(dbType DBType, configuredUser string) string {
 
 func ValidateURL(dbType DBType, dbURL string) error {
 	urlType := InferDBTypeFromURL(dbURL)
+	redacted := util.RedactJDBCURL(dbURL)
 	if urlType == "" {
-		return fmt.Errorf("db-url %q is not a supported JDBC URL (expected derby, postgres, or mysql)", dbURL)
+		return fmt.Errorf("db-url %q is not a supported JDBC URL (expected derby, postgres, or mysql)", redacted)
 	}
 	if urlType != dbType {
-		return fmt.Errorf("db-type %q does not match db-url %q", dbType, dbURL)
+		return fmt.Errorf("db-type %q does not match db-url %q", dbType, redacted)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,7 @@ func newListCmd(pathsGetter PathsGetter) *cobra.Command {
 				settings.User,
 				settings.BaseDir,
 				settings.DBType,
-				settings.DBURL,
+				util.RedactJDBCURL(settings.DBURL),
 				maskedPassword(settings.DBPassword),
 			); err != nil {
 				return err
@@ -41,5 +42,5 @@ func maskedPassword(value string) string {
 	if value == "" {
 		return ""
 	}
-	return "********"
+	return util.RedactedValue
 }

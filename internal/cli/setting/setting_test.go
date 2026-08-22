@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
 func executeCommand(t *testing.T, cmdArgs ...string) (string, error) {
@@ -216,5 +217,188 @@ func TestSettingShow_Spark_RedactsCopiedHiveSite(t *testing.T) {
 	}
 	if !strings.Contains(out, "<name>hive.metastore.uris</name>") || !strings.Contains(out, "<value>thrift://localhost:9083</value>") {
 		t.Fatalf("expected non-sensitive hive-site property in output:\n%s", out)
+	}
+}
+
+func TestSettingList_RedactsPasswordBearingDBURL(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	sm := config.NewSettingsManager(paths)
+	if err := sm.Save(&config.Settings{
+		User:       "daniel",
+		DBType:     "postgres",
+		DBURL:      "jdbc:postgresql://alice:" + secret + "@localhost:5432/metastore",
+		DBPassword: secret,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting list: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, secret) {
+		t.Fatalf("setting list leaked secret:\n%s", out)
+	}
+	if !strings.Contains(out, "db-url: jdbc:postgresql://alice:********@localhost:5432/metastore") {
+		t.Fatalf("expected redacted db-url:\n%s", out)
+	}
+	if !strings.Contains(out, "db-password: ********") {
+		t.Fatalf("expected masked db-password:\n%s", out)
+	}
+}
+
+func TestSettingSet_DBPasswordFromStdin(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader(secret + "\n"))
+	cmd.SetArgs([]string{"set", "db-password", "--stdin"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting set: %v", err)
+	}
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("setting set leaked secret:\n%s", combined)
+	}
+
+	settings, err := config.NewSettingsManager(paths).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestSettingSet_DBPasswordFromFile(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	pwFile := filepath.Join(baseDir, "pw")
+	if err := os.WriteFile(pwFile, []byte(secret+"\n"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	paths := config.NewPaths("", baseDir)
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"set", "db-password", "--from-file", pwFile})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting set: %v", err)
+	}
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("setting set leaked secret:\n%s", combined)
+	}
+
+	settings, err := config.NewSettingsManager(paths).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestSettingSet_DBPasswordPositionalIsDeprecated(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"set", "db-password", secret})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting set: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "deprecated") {
+		t.Fatalf("expected deprecation warning, got: %s", errBuf.String())
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Fatalf("stdout leaked secret:\n%s", out.String())
+	}
+
+	settings, err := config.NewSettingsManager(paths).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestSettingSet_DBPasswordFromEnv(t *testing.T) {
+	const secret = "s3cret-value"
+	t.Setenv(util.DBPasswordEnvVar, secret)
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"set", "db-password"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting set: %v", err)
+	}
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("setting set leaked secret:\n%s", combined)
+	}
+
+	settings, err := config.NewSettingsManager(paths).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if settings.DBPassword != secret {
+		t.Fatalf("DBPassword = %q", settings.DBPassword)
+	}
+}
+
+func TestSettingSet_DBURLMismatchWarningRedactsPassword(t *testing.T) {
+	const secret = "s3cret-value"
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+	sm := config.NewSettingsManager(paths)
+	if err := sm.Save(&config.Settings{
+		User:   "daniel",
+		DBType: "postgres",
+		DBURL:  "jdbc:postgresql://alice:" + secret + "@localhost:5432/metastore",
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	cmd := NewSettingCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"set", "db-type", "mysql"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("setting set: %v", err)
+	}
+	combined := out.String() + errBuf.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("warning leaked secret:\n%s", combined)
 	}
 }
