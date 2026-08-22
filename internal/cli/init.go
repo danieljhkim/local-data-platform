@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
@@ -25,11 +26,12 @@ var runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut 
 
 func newInitCmd(pathsGetter func() *config.Paths) *cobra.Command {
 	var (
-		force      bool
-		user       string
-		dbType     string
-		dbURL      string
-		dbPassword string
+		force          bool
+		user           string
+		dbType         string
+		dbURL          string
+		dbPassword     string
+		dbPasswordFile string
 	)
 
 	cmd := &cobra.Command{
@@ -38,7 +40,11 @@ func newInitCmd(pathsGetter func() *config.Paths) *cobra.Command {
 		Long: `Initialize local-data profiles and metastore.
 
 This command generates profile configs and bootstraps metastore schema.
-Defaults to Derby metastore for zero-setup local usage.`,
+Defaults to Derby metastore for zero-setup local usage.
+
+Supply the metastore password with --db-password-file, LOCAL_DATA_DB_PASSWORD,
+or the interactive prompt (terminal echo is disabled). --db-password is
+deprecated because it places the secret in process arguments and shell history.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			paths := pathsGetter()
 			pm := config.NewProfileManager(paths)
@@ -74,8 +80,12 @@ Defaults to Derby metastore for zero-setup local usage.`,
 			if dbURL != "" {
 				opts.DBUrl = dbURL
 			}
-			if dbPassword != "" {
-				opts.DBPassword = dbPassword
+			resolvedPassword, err := resolveInitPassword(cmd.ErrOrStderr(), dbPasswordFile, dbPassword)
+			if err != nil {
+				return err
+			}
+			if resolvedPassword != "" {
+				opts.DBPassword = resolvedPassword
 			}
 
 			reader := bufio.NewReader(cmd.InOrStdin())
@@ -93,11 +103,11 @@ Defaults to Derby metastore for zero-setup local usage.`,
 			}
 			opts.DBType = string(dbTypeNormalized)
 
-			opts.DBUrl, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-url", opts.DBUrl)
+			opts.DBUrl, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-url", opts.DBUrl, util.RedactJDBCURL(opts.DBUrl))
 			if err != nil {
 				return err
 			}
-			opts.DBPassword, err = confirmInitValue(cmd.OutOrStdout(), reader, "db-password", opts.DBPassword, maskedInitValue(opts.DBPassword))
+			opts.DBPassword, err = confirmInitPassword(cmd.OutOrStdout(), cmd.InOrStdin(), reader, opts.DBPassword)
 			if err != nil {
 				return err
 			}
@@ -130,9 +140,44 @@ Defaults to Derby metastore for zero-setup local usage.`,
 	cmd.Flags().StringVar(&user, "user", "", "Override username for template substitution")
 	cmd.Flags().StringVar(&dbType, "db-type", "", "Metastore DB type (derby, postgres, mysql)")
 	cmd.Flags().StringVar(&dbURL, "db-url", "", "Override Hive metastore database connection URL")
-	cmd.Flags().StringVar(&dbPassword, "db-password", "", "Override Hive metastore database password")
+	cmd.Flags().StringVar(&dbPassword, "db-password", "", "Deprecated: places the secret in argv. Prefer --db-password-file, LOCAL_DATA_DB_PASSWORD, or the interactive prompt.")
+	cmd.Flags().StringVar(&dbPasswordFile, "db-password-file", "", "Read Hive metastore database password from a file (does not place the secret in argv)")
+	_ = cmd.Flags().MarkDeprecated("db-password", "places the secret in process arguments and shell history; use --db-password-file, LOCAL_DATA_DB_PASSWORD, or the interactive prompt")
 
 	return cmd
+}
+
+func resolveInitPassword(errOut io.Writer, passwordFile, deprecatedFlag string) (string, error) {
+	if passwordFile != "" {
+		return util.ReadSecretFile(passwordFile)
+	}
+	if deprecatedFlag != "" {
+		if _, err := fmt.Fprintln(errOut, util.DeprecatedPasswordArgWarning); err != nil {
+			return "", err
+		}
+		return deprecatedFlag, nil
+	}
+	if envVal := os.Getenv(util.DBPasswordEnvVar); envVal != "" {
+		return envVal, nil
+	}
+	return "", nil
+}
+
+func confirmInitPassword(out io.Writer, in io.Reader, reader *bufio.Reader, current string) (string, error) {
+	if _, err := fmt.Fprintf(out, "confirm db-password to be: %s\n", maskedInitValue(current)); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprint(out, "Press Enter to confirm, or type a new value: "); err != nil {
+		return "", err
+	}
+	value, err := util.ReadSecretLine(reader, in, out)
+	if err != nil {
+		return "", fmt.Errorf("failed to read db-password confirmation: %w", err)
+	}
+	if value != "" {
+		return value, nil
+	}
+	return current, nil
 }
 
 func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string, displayValue ...string) (string, error) {

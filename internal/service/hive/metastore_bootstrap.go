@@ -16,7 +16,7 @@ import (
 
 var dbIdentPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
-type mysqlConnInfo struct {
+type sqlConnInfo struct {
 	host     string
 	port     string
 	user     string
@@ -101,7 +101,7 @@ func (h *HiveService) ensureDatabaseExists(dbType metastore.DBType, dbURL string
 			return nil
 		}
 
-		if _, err := fmt.Fprintf(errOut, "WARNING: %s metastore database not found for URL: %s\n", dbType, dbURL); err != nil {
+		if _, err := fmt.Fprintf(errOut, "WARNING: %s metastore database not found for URL: %s\n", dbType, util.RedactJDBCURL(dbURL)); err != nil {
 			return err
 		}
 		create, err := confirmYesNo(in, out, "Create metastore database now? [y/N]: ")
@@ -137,16 +137,17 @@ func confirmYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
 func (h *HiveService) databaseExists(dbType metastore.DBType, dbURL string) (bool, error) {
 	switch dbType {
 	case metastore.Postgres:
-		adminURL, dbName, err := parsePostgresURL(dbURL)
+		info, err := parsePostgresURL(dbURL)
 		if err != nil {
 			return false, err
 		}
-		if !dbIdentPattern.MatchString(dbName) {
-			return false, fmt.Errorf("unsupported postgres database name %q", dbName)
+		if !dbIdentPattern.MatchString(info.dbName) {
+			return false, fmt.Errorf("unsupported postgres database name %q", info.dbName)
 		}
-		sql := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s';", escapeSQLLiteral(dbName))
-		cmd := exec.Command("psql", adminURL, "-tAc", sql)
-		cmd.Env = h.env.Export()
+		sql := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s';", escapeSQLLiteral(info.dbName))
+		args := append(postgresBaseArgs(info, "postgres"), "-tAc", sql)
+		cmd := exec.Command("psql", args...)
+		cmd.Env = postgresCmdEnv(h.env.Export(), info)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return false, fmt.Errorf("postgres database existence check failed: %v\nOutput: %s", err, strings.TrimSpace(string(out)))
@@ -178,20 +179,21 @@ func (h *HiveService) databaseExists(dbType metastore.DBType, dbURL string) (boo
 func (h *HiveService) createDatabase(dbType metastore.DBType, dbURL string) error {
 	switch dbType {
 	case metastore.Postgres:
-		adminURL, dbName, err := parsePostgresURL(dbURL)
+		info, err := parsePostgresURL(dbURL)
 		if err != nil {
 			return err
 		}
-		if !dbIdentPattern.MatchString(dbName) {
-			return fmt.Errorf("unsupported postgres database name %q", dbName)
+		if !dbIdentPattern.MatchString(info.dbName) {
+			return fmt.Errorf("unsupported postgres database name %q", info.dbName)
 		}
-		cmd := exec.Command("psql", adminURL, "-c", fmt.Sprintf("CREATE DATABASE %s;", dbName))
-		cmd.Env = h.env.Export()
+		args := append(postgresBaseArgs(info, "postgres"), "-c", fmt.Sprintf("CREATE DATABASE %s;", info.dbName))
+		cmd := exec.Command("psql", args...)
+		cmd.Env = postgresCmdEnv(h.env.Export(), info)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("failed to create postgres database %q: %v\nOutput: %s", dbName, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("failed to create postgres database %q: %v\nOutput: %s", info.dbName, err, strings.TrimSpace(string(out)))
 		}
-		util.Log("Created Postgres metastore database %q", dbName)
+		util.Log("Created Postgres metastore database %q", info.dbName)
 		return nil
 	case metastore.MySQL:
 		info, err := parseMySQLURL(dbURL)
@@ -216,51 +218,89 @@ func (h *HiveService) createDatabase(dbType metastore.DBType, dbURL string) erro
 	}
 }
 
-func parsePostgresURL(dbURL string) (string, string, error) {
-	raw := strings.TrimSpace(dbURL)
-	if !strings.HasPrefix(strings.ToLower(raw), "jdbc:postgresql://") {
-		return "", "", fmt.Errorf("invalid postgres db-url %q", dbURL)
-	}
-	u, err := url.Parse(strings.TrimPrefix(raw, "jdbc:"))
+func parsePostgresURL(dbURL string) (*sqlConnInfo, error) {
+	u, dbName, err := parseJDBCURL(dbURL, "postgresql")
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse postgres db-url: %w", err)
+		return nil, err
 	}
-
-	dbName := strings.TrimPrefix(u.Path, "/")
-	if dbName == "" {
-		return "", "", fmt.Errorf("postgres db-url missing database name: %q", dbURL)
-	}
-	admin := *u
-	admin.Path = "/postgres"
-	admin.RawQuery = ""
-	return admin.String(), dbName, nil
+	info := connInfoFromURL(u, dbName, "localhost", "5432")
+	return info, nil
 }
 
-func parseMySQLURL(dbURL string) (*mysqlConnInfo, error) {
-	raw := strings.TrimSpace(dbURL)
-	if !strings.HasPrefix(strings.ToLower(raw), "jdbc:mysql://") {
-		return nil, fmt.Errorf("invalid mysql db-url %q", dbURL)
-	}
-	u, err := url.Parse(strings.TrimPrefix(raw, "jdbc:"))
+func parseMySQLURL(dbURL string) (*sqlConnInfo, error) {
+	u, dbName, err := parseJDBCURL(dbURL, "mysql")
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse mysql db-url: %w", err)
+		return nil, err
+	}
+	return connInfoFromURL(u, dbName, "localhost", "3306"), nil
+}
+
+func parseJDBCURL(dbURL, driver string) (*url.URL, string, error) {
+	raw := strings.TrimSpace(dbURL)
+	prefix := "jdbc:" + driver + "://"
+	if !strings.HasPrefix(strings.ToLower(raw), prefix) {
+		return nil, "", fmt.Errorf("invalid %s db-url %q", driver, util.RedactJDBCURL(dbURL))
+	}
+	rest := raw
+	if len(raw) >= 5 && strings.EqualFold(raw[:5], "jdbc:") {
+		rest = raw[5:]
+	}
+	u, err := url.Parse(rest)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to parse %s db-url: %w", driver, err)
 	}
 	dbName := strings.TrimPrefix(u.Path, "/")
 	if dbName == "" {
-		return nil, fmt.Errorf("mysql db-url missing database name: %q", dbURL)
+		return nil, "", fmt.Errorf("%s db-url missing database name: %q", driver, util.RedactJDBCURL(dbURL))
 	}
+	return u, dbName, nil
+}
 
-	password, _ := u.User.Password()
-	return &mysqlConnInfo{
-		host:     defaultString(u.Hostname(), "localhost"),
-		port:     defaultString(u.Port(), "3306"),
-		user:     u.User.Username(),
+func connInfoFromURL(u *url.URL, dbName, defaultHost, defaultPort string) *sqlConnInfo {
+	user := ""
+	password := ""
+	if u.User != nil {
+		user = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	q := u.Query()
+	if user == "" {
+		user = firstNonEmpty(q.Get("user"), q.Get("username"))
+	}
+	if password == "" {
+		password = firstNonEmpty(q.Get("password"), q.Get("pwd"), q.Get("passwd"))
+	}
+	return &sqlConnInfo{
+		host:     defaultString(u.Hostname(), defaultHost),
+		port:     defaultString(u.Port(), defaultPort),
+		user:     user,
 		password: password,
 		dbName:   dbName,
-	}, nil
+	}
 }
 
-func mysqlBaseArgs(info *mysqlConnInfo) []string {
+func postgresBaseArgs(info *sqlConnInfo, database string) []string {
+	args := make([]string, 0, 8)
+	if info.host != "" {
+		args = append(args, "-h", info.host)
+	}
+	if info.port != "" {
+		args = append(args, "-p", info.port)
+	}
+	if info.user != "" {
+		args = append(args, "-U", info.user)
+	}
+	if database != "" {
+		args = append(args, "-d", database)
+	}
+	return args
+}
+
+func postgresCmdEnv(baseEnv []string, info *sqlConnInfo) []string {
+	return withPasswordEnv(baseEnv, "PGPASSWORD", info.password)
+}
+
+func mysqlBaseArgs(info *sqlConnInfo) []string {
 	args := []string{
 		"--batch",
 		"--skip-column-names",
@@ -277,11 +317,32 @@ func mysqlBaseArgs(info *mysqlConnInfo) []string {
 
 // mysqlCmdEnv returns environment variables for MySQL commands,
 // including MYSQL_PWD if a password is set.
-func mysqlCmdEnv(baseEnv []string, info *mysqlConnInfo) []string {
-	if info.password != "" {
-		return append(baseEnv, "MYSQL_PWD="+info.password)
+func mysqlCmdEnv(baseEnv []string, info *sqlConnInfo) []string {
+	return withPasswordEnv(baseEnv, "MYSQL_PWD", info.password)
+}
+
+func withPasswordEnv(baseEnv []string, key, password string) []string {
+	if password == "" {
+		return baseEnv
 	}
-	return baseEnv
+	prefix := key + "="
+	out := make([]string, 0, len(baseEnv)+1)
+	for _, e := range baseEnv {
+		if strings.HasPrefix(e, prefix) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, prefix+password)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func escapeSQLLiteral(s string) string {

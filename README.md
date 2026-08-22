@@ -117,6 +117,11 @@ local-data setting list
 local-data setting set db-type postgres
 local-data setting set db-url "jdbc:postgresql://localhost:5432/my_metastore"
 
+# Set db-password without placing the secret in argv (prompt disables echo)
+local-data setting set db-password
+# or: printenv METASTORE_PASSWORD | local-data setting set db-password --stdin
+# or: local-data setting set db-password --from-file "$HOME/.config/local-data/db-password"
+
 # Show active profile config content
 local-data setting show hive     # prints hive-site.xml
 local-data setting show spark    # prints spark-defaults.conf + spark hive-site.xml
@@ -124,7 +129,7 @@ local-data setting show hadoop   # prints Hadoop config files
 ```
 
 Setting precedence (highest to lowest):
-1. CLI flags (`--db-url`, `--db-password`, `--user`, `--db-type`)
+1. CLI flags (`--db-url`, `--user`, `--db-type`) and secret-safe password input (`--db-password-file`, `--from-file`, `--stdin`, `LOCAL_DATA_DB_PASSWORD`, or prompt)
 2. Persisted settings (`$BASE_DIR/settings/setting.json`)
 3. Built-in defaults
 

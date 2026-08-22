@@ -62,10 +62,12 @@ local-data init
 #   - db-url: jdbc:derby:;databaseName=$BASE_DIR/state/hive/metastore_db;create=true
 #   - db-password: (empty)
 
-# Optional: override settings during init
+# Optional: override settings during init.
+# Pass the password via a file, LOCAL_DATA_DB_PASSWORD, or the echo-free prompt.
+# Do not pass --db-password on the command line (deprecated; lands in argv/history).
 local-data init --user daniel --db-type postgres \
   --db-url "jdbc:postgresql://localhost:5432/metastore" \
-  --db-password "secret"
+  --db-password-file "$HOME/.config/local-data/db-password"
 ```
 
 ---
@@ -79,7 +81,9 @@ local-data setting list
 # Update individual settings
 local-data setting set db-type postgres
 local-data setting set db-url "jdbc:postgresql://localhost:5432/my_metastore"
-local-data setting set db-password "secret"
+local-data setting set db-password --from-file "$HOME/.config/local-data/db-password"
+# or: local-data setting set db-password          # interactive, echo disabled
+# or: printenv METASTORE_PASSWORD | local-data setting set db-password --stdin
 local-data setting set user daniel
 
 # Show active profile config content
