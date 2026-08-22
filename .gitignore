@@ -6,7 +6,12 @@
 /.box/state/**
 /.box/env/.env.local
 
-.orbit
 raw
 metastore_db
 derby.log
+.orbit/*
+!.orbit/auto_tasks/
+!.orbit/resources/
+!.orbit/routines/
+!.orbit/config.toml
+.orbit/**/*.lock
