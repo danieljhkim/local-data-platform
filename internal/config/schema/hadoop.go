@@ -69,11 +69,13 @@ func (c *CoreSiteConfig) ToProperties(ctx *TemplateContext) []Property {
 
 // HDFSSiteConfig represents hdfs-site.xml properties
 type HDFSSiteConfig struct {
-	Replication        int    // dfs.replication
-	NameNodeRPCAddress string // dfs.namenode.rpc-address
-	NameNodeNameDir    string // dfs.namenode.name.dir (templated)
-	DataNodeDataDir    string // dfs.datanode.data.dir (templated)
-	Extra              []Property
+	Replication         int    // dfs.replication
+	NameNodeRPCAddress  string // dfs.namenode.rpc-address
+	NameNodeNameDir     string // dfs.namenode.name.dir (templated)
+	DataNodeDataDir     string // dfs.datanode.data.dir (templated)
+	NameNodeHTTPAddress string // dfs.namenode.http-address
+	DataNodeHTTPAddress string // dfs.datanode.http.address
+	Extra               []Property
 }
 
 // Clone creates a deep copy
@@ -93,6 +95,8 @@ func (c *HDFSSiteConfig) ToProperties(ctx *TemplateContext) []Property {
 		{Name: "dfs.namenode.rpc-address", Value: c.NameNodeRPCAddress},
 		{Name: "dfs.namenode.name.dir", Value: ctx.Substitute(c.NameNodeNameDir)},
 		{Name: "dfs.datanode.data.dir", Value: ctx.Substitute(c.DataNodeDataDir)},
+		{Name: "dfs.namenode.http-address", Value: c.NameNodeHTTPAddress},
+		{Name: "dfs.datanode.http.address", Value: c.DataNodeHTTPAddress},
 	}
 	return appendExtraProperties(props, c.Extra, ctx)
 }

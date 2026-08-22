@@ -20,6 +20,10 @@ type HiveConfig struct {
 	Authentication string // hive.server2.authentication
 	EnableDoAs     bool   // hive.server2.enable.doAs
 
+	// HiveServer2 Web UI
+	WebUIHost string // hive.server2.webui.host
+	WebUIPort int    // hive.server2.webui.port (0 disables the Web UI)
+
 	// Schema verification
 	SchemaVerification bool // hive.metastore.schema.verification
 	AutoCreateSchema   bool // datanucleus.schema.autoCreateAll
@@ -55,6 +59,10 @@ func (c *HiveConfig) ToProperties(ctx *TemplateContext) []Property {
 		{Name: "hive.server2.thrift.port", Value: strconv.Itoa(c.ThriftPort)},
 		{Name: "hive.server2.authentication", Value: c.Authentication},
 		{Name: "hive.server2.enable.doAs", Value: boolToString(c.EnableDoAs)},
+
+		// HiveServer2 Web UI
+		{Name: "hive.server2.webui.host", Value: c.WebUIHost},
+		{Name: "hive.server2.webui.port", Value: strconv.Itoa(c.WebUIPort)},
 
 		// Schema
 		{Name: "hive.metastore.schema.verification", Value: boolToString(c.SchemaVerification)},

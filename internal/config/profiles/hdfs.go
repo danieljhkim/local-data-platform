@@ -18,10 +18,12 @@ func HDFSProfile() *Profile {
 					FallbackToSimpleAuth:   true,
 				},
 				HDFSSite: &schema.HDFSSiteConfig{
-					Replication:        1,
-					NameNodeRPCAddress: "localhost:8020",
-					NameNodeNameDir:    "file:{{BASE_DIR}}/state/hdfs/namenode",
-					DataNodeDataDir:    "file:{{BASE_DIR}}/state/hdfs/datanode",
+					Replication:         1,
+					NameNodeRPCAddress:  "localhost:8020",
+					NameNodeNameDir:     "file:{{BASE_DIR}}/state/hdfs/namenode",
+					DataNodeDataDir:     "file:{{BASE_DIR}}/state/hdfs/datanode",
+					NameNodeHTTPAddress: "127.0.0.1:9870",
+					DataNodeHTTPAddress: "127.0.0.1:9864",
 				},
 				YarnSite: &schema.YarnSiteConfig{
 					AuxServices:             "mapreduce_shuffle",
@@ -61,6 +63,8 @@ func HDFSProfile() *Profile {
 				ThriftPort:           10000,
 				Authentication:       "NONE",
 				EnableDoAs:           false,
+				WebUIHost:            "127.0.0.1",
+				WebUIPort:            10002,
 				Extra: []schema.Property{
 					{Name: "hive.metastore.event.db.notification.api.auth", Value: "false"},
 					{Name: "hive.execution.engine", Value: "mr"},
