@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/danieljhkim/local-data-platform/internal/config/schema"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // OverrideConfig represents user overrides from YAML
