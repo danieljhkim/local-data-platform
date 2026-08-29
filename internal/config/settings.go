@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
@@ -39,6 +40,16 @@ func (sm *SettingsManager) Path() string {
 
 // Load reads settings from disk.
 func (sm *SettingsManager) Load() (*Settings, error) {
+	var settings *Settings
+	err := withConfigLock(sm.paths, func() error {
+		var err error
+		settings, err = sm.loadUnlocked()
+		return err
+	})
+	return settings, err
+}
+
+func (sm *SettingsManager) loadUnlocked() (*Settings, error) {
 	data, err := os.ReadFile(sm.Path())
 	if err != nil {
 		return nil, err
@@ -59,34 +70,94 @@ func (sm *SettingsManager) Load() (*Settings, error) {
 
 // Save writes settings to disk.
 func (sm *SettingsManager) Save(settings *Settings) error {
+	return withConfigLock(sm.paths, func() error {
+		return sm.saveAndApplyUnlocked(settings)
+	})
+}
+
+// UpdateAndApply serializes a read-modify-write setting change and publishes
+// the settings JSON together with every existing Hive XML copy.
+func (sm *SettingsManager) UpdateAndApply(update func(*Settings) error) error {
+	if update == nil {
+		return fmt.Errorf("settings update required")
+	}
+	return withConfigLock(sm.paths, func() error {
+		settings, err := sm.loadOrDefaultUnlocked()
+		if err != nil {
+			return err
+		}
+		if err := update(settings); err != nil {
+			return err
+		}
+		return sm.saveAndApplyUnlocked(settings)
+	})
+}
+
+func (sm *SettingsManager) saveAndApplyUnlocked(settings *Settings) error {
+	transactionID := newTransactionID()
+	settingsEntry, err := sm.stageSettings(settings, transactionID)
+	if err != nil {
+		return err
+	}
+
+	xmlEntries, err := NewSettingsApplier(sm.paths).stageHiveSettings(settings, transactionID)
+	if err != nil {
+		_ = os.RemoveAll(settingsEntry.Stage)
+		return err
+	}
+	// Publish XML first and settings last. Locked readers observe either the
+	// complete old set or the complete new set, and rollback covers any error.
+	entries := append(xmlEntries, settingsEntry)
+	return publishStaged(sm.paths, transactionID, entries)
+}
+
+func (sm *SettingsManager) stageSettings(settings *Settings, transactionID string) (stagedReplacement, error) {
 	if settings == nil {
-		return fmt.Errorf("settings required")
+		return stagedReplacement{}, fmt.Errorf("settings required")
 	}
 	// base-dir is static and derived from runtime paths.
 	settings.BaseDir = sm.paths.BaseDir
 	if err := sm.sanitize(settings); err != nil {
-		return err
+		return stagedReplacement{}, err
 	}
 
 	if err := os.MkdirAll(sm.paths.SettingsDir(), 0755); err != nil {
-		return err
+		return stagedReplacement{}, err
 	}
 
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal settings: %w", err)
+		return stagedReplacement{}, fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
-	if err := util.WriteFile(sm.Path(), append(data, '\n'), util.PrivateFileMode); err != nil {
-		return err
+	entry := newStagedReplacement(sm.Path(), "settings", transactionID)
+	if err := sm.paths.runConfigHook("settings.write"); err != nil {
+		return stagedReplacement{}, err
 	}
-
-	return nil
+	if err := util.WriteFile(entry.Stage, append(data, '\n'), util.PrivateFileMode); err != nil {
+		_ = os.Remove(entry.Stage)
+		return stagedReplacement{}, err
+	}
+	if err := syncFile(entry.Stage); err != nil {
+		_ = os.Remove(entry.Stage)
+		return stagedReplacement{}, err
+	}
+	return entry, nil
 }
 
 // LoadOrDefault reads settings if available, otherwise returns runtime defaults.
 func (sm *SettingsManager) LoadOrDefault() (*Settings, error) {
-	settings, err := sm.Load()
+	var settings *Settings
+	err := withConfigLock(sm.paths, func() error {
+		var err error
+		settings, err = sm.loadOrDefaultUnlocked()
+		return err
+	})
+	return settings, err
+}
+
+func (sm *SettingsManager) loadOrDefaultUnlocked() (*Settings, error) {
+	settings, err := sm.loadUnlocked()
 	if err == nil {
 		return settings, nil
 	}
@@ -95,6 +166,14 @@ func (sm *SettingsManager) LoadOrDefault() (*Settings, error) {
 	}
 
 	return defaultSettings(sm.paths.BaseDir), nil
+}
+
+func relativeConfigPath(paths *Paths, path string) string {
+	rel, err := filepath.Rel(paths.BaseDir, path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 func defaultSettings(baseDir string) *Settings {
