@@ -28,37 +28,29 @@ func TestNewProcessManager(t *testing.T) {
 	}
 }
 
-func TestProcessManager_Start_Success(t *testing.T) {
+func TestProcessManager_Start_RejectsImmediateExit(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidDir := filepath.Join(tmpDir, "pids")
 	logDir := filepath.Join(tmpDir, "logs")
 
 	pm := NewProcessManager(pidDir, logDir)
 
-	cmd := exec.Command("sleep", "10")
+	// A daemon that exits successfully is still a failed service start.
+	cmd := exec.Command("echo", "test")
 	name := "test-process"
 
 	pid, err := pm.Start(name, cmd, "test.log")
-
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+	if err == nil {
+		t.Fatal("Start() should reject a process that exits during startup")
+	}
+	if pid != 0 {
+		t.Errorf("Start() returned PID %d for failed startup, want 0", pid)
 	}
 
-	if pid <= 0 {
-		t.Errorf("Start() returned invalid PID = %d", pid)
-	}
-
-	// Verify PID file was created
+	// A failed startup must not leave an authoritative PID file behind.
 	pidFile := filepath.Join(pidDir, name+".pid")
-	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
-		t.Error("PID file not created")
-	}
-
-	// Verify PID file contains correct PID
-	content, _ := os.ReadFile(pidFile)
-	pidFromFile, _ := strconv.Atoi(string(content))
-	if pidFromFile != pid {
-		t.Errorf("PID in file = %d, want %d", pidFromFile, pid)
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Errorf("PID file exists after failed startup: %v", err)
 	}
 
 	// Verify log file was created
@@ -66,11 +58,6 @@ func TestProcessManager_Start_Success(t *testing.T) {
 	if _, err := os.Stat(logFile); os.IsNotExist(err) {
 		t.Error("Log file not created")
 	}
-
-	if err := pm.Stop(name); err != nil {
-		t.Fatalf("Stop() cleanup error = %v", err)
-	}
-	_ = cmd.Wait()
 }
 
 func TestProcessManager_Stop_ByPID(t *testing.T) {
@@ -135,7 +122,6 @@ func TestProcessManager_Stop_TrimsPIDWhitespace(t *testing.T) {
 		t.Errorf("Stop() error = %v", err)
 	}
 
-	_ = cmd.Wait()
 }
 
 func TestProcessManager_Stop_RejectsValidatorMismatchWithoutSignaling(t *testing.T) {
@@ -237,8 +223,6 @@ func TestProcessManager_Status_Running(t *testing.T) {
 	if err := pm.Stop(name); err != nil {
 		t.Fatalf("Stop() cleanup error = %v", err)
 	}
-	// The process is expected to exit because Stop sends SIGTERM.
-	_ = cmd.Wait()
 }
 
 func TestProcessManager_Status_TrimsPIDWhitespace(t *testing.T) {
@@ -257,7 +241,6 @@ func TestProcessManager_Status_TrimsPIDWhitespace(t *testing.T) {
 	}
 	defer func() {
 		_ = pm.Stop(name)
-		_ = cmd.Wait()
 	}()
 
 	pidFile := filepath.Join(pidDir, name+".pid")
@@ -320,9 +303,6 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	if err := pm.Stop(name); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	// The process is expected to exit because Stop sends SIGTERM.
-	_ = cmd.Wait()
-
 	time.Sleep(100 * time.Millisecond)
 	if pm.IsRunning(name) {
 		t.Error("IsRunning() = true after stop, want false")

@@ -161,8 +161,12 @@ make build
 # Run unit tests (no system dependencies)
 make test
 
-# Integration tests (requires Hadoop/Hive/Spark/Postgres/Java 17)
+# Hermetic black-box tests (build the real CLI and use deterministic shims)
 make test-integration
+
+# Optional live macOS smoke test against installed services
+# Requires Homebrew Hadoop, Hive, Spark, Java 17, and idle default ports.
+make test-integration-live
 
 # Run tests with coverage
 make test-coverage
@@ -177,6 +181,15 @@ make lint  # Requires golangci-lint
 # Clean build artifacts
 make clean
 ```
+
+The default integration lane isolates runtime state beneath a temporary
+`HOME`, builds the real `local-data` binary, and supplies deterministic command
+shims. It does not require Hadoop, Hive, Spark, Postgres, or MySQL to be
+installed. The live lane is deliberately opt-in: it uses a temporary `HOME`,
+bootstraps Derby, exercises local Hive, performs an HDFS write/read round trip,
+runs a small Spark job, and always attempts `local-data stop` during cleanup.
+Do not run the live lane while another local-data cluster owns the default
+service ports.
 
 ### CI-equivalent checks
 

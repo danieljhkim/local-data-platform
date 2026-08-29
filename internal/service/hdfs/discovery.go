@@ -179,8 +179,18 @@ func IsProcessRunning(pid int) bool {
 // WaitForSafeMode waits for HDFS to exit safe mode
 // Returns error if timeout is reached
 func WaitForSafeMode(maxRetries int) error {
+	return WaitForSafeModeWithEnv(maxRetries, nil)
+}
+
+// WaitForSafeModeWithEnv waits for HDFS to exit safe mode using the supplied
+// runtime environment. Service startup passes the active overlay here so the
+// readiness probe observes the same cluster configuration as the daemons.
+func WaitForSafeModeWithEnv(maxRetries int, environment []string) error {
 	for i := 0; i < maxRetries; i++ {
 		cmd := exec.Command("hdfs", "dfsadmin", "-safemode", "get")
+		if environment != nil {
+			cmd.Env = environment
+		}
 		output, err := cmd.Output()
 		if err != nil {
 			// Command failed, HDFS might not be ready

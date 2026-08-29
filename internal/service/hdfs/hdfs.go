@@ -79,7 +79,8 @@ func (h *HDFSService) Start() error {
 	// Wait for safe mode to exit (increase retries for fresh format)
 	util.Log("Waiting for NameNode to exit safe mode...")
 	safeModeExited := true
-	if err := WaitForSafeMode(10); err != nil {
+	runtimeEnv := h.env.MergeWithCurrent()
+	if err := WaitForSafeModeWithEnv(10, runtimeEnv); err != nil {
 		util.Warn("%v", err)
 		util.Warn("NameNode may still be in safe mode. Check logs: %s", hdfsPaths.LogsDir)
 		safeModeExited = false
@@ -93,7 +94,7 @@ func (h *HDFSService) Start() error {
 	if err == nil {
 		username = currentUser.Username
 	}
-	if err := CreateCommonHDFSDirs(username); err != nil {
+	if err := CreateCommonHDFSDirsWithEnv(username, runtimeEnv); err != nil {
 		util.Warn("Failed to create some HDFS directories: %v", err)
 		if !safeModeExited {
 			util.Warn("This is likely because HDFS is still in safe mode.")

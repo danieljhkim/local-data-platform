@@ -1,4 +1,4 @@
-.PHONY: help build install clean test test-coverage format perms path all
+.PHONY: help build install install-user go-install clean test test-coverage test-integration test-integration-live test-all test-coverage-all test-quick format lint vet deps version size all
 
 # Default target
 .DEFAULT_GOAL := help
@@ -75,18 +75,27 @@ test-coverage: ## Run unit tests with coverage report
 	@echo "✓ Coverage report generated: coverage.html"
 	@go tool cover -func=coverage.out | grep total | awk '{print "✓ Total coverage: " $$3}'
 
-test-integration: ## Run integration tests (requires system dependencies: Hadoop, Hive, Postgres)
-	@echo "Running integration tests..."
-	@echo "⚠️  Integration tests require: Hadoop, Hive, Spark, Postgres, Java 17"
-	go test -v -tags=integration ./test/integration/...
+test-integration: ## Run hermetic black-box integration tests (no Hadoop/Hive install required)
+	@echo "Running hermetic integration tests..."
+	@listing="$$(go test -tags=integration -list '^Test' ./test/integration)" || exit $$?; \
+		test_names="$$(printf '%s\n' "$$listing" | grep '^Test' || true)"; \
+		if [ -z "$$test_names" ]; then \
+			echo "ERROR: no named integration tests discovered" >&2; \
+			exit 1; \
+		fi; \
+		printf 'Discovered integration tests:\n%s\n' "$$test_names"
+	go test -count=1 -v -tags=integration ./test/integration/...
 
-test-all: ## Run all tests (unit + integration)
-	@echo "Running all tests (unit + integration)..."
-	go test -v ./internal/... ./test/integration/...
+test-integration-live: ## Run opt-in macOS smoke tests against installed Hadoop/Hive/Spark
+	@echo "Running live macOS integration smoke test..."
+	@echo "Requires idle service ports plus Homebrew Hadoop, Hive, Spark, and Java 17"
+	LOCAL_DATA_LIVE_SMOKE=1 go test -count=1 -v -tags='integration live_smoke' -run '^TestLiveMacOSSmoke$$' ./test/integration
 
-test-coverage-all: ## Run all tests with coverage report
+test-all: test test-integration ## Run unit and hermetic integration tests
+
+test-coverage-all: test-integration ## Run hermetic integration tests and unit coverage
 	@echo "Running all tests with coverage..."
-	go test -v -coverprofile=coverage.out ./internal/... ./test/integration/...
+	go test -v -coverprofile=coverage.out ./internal/...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "✓ Coverage report generated: coverage.html"
 	@go tool cover -func=coverage.out | grep total | awk '{print "✓ Total coverage: " $$3}'
