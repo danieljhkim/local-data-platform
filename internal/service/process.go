@@ -58,6 +58,14 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 		return 0, fmt.Errorf("failed to start process: %w", err)
 	}
 
+	// Reap the child when it exits and retain its result for startup
+	// verification. Without a waiter, an immediately failing daemon remains a
+	// zombie and kill(0) incorrectly reports it as alive.
+	exited := make(chan error, 1)
+	go func() {
+		exited <- cmd.Wait()
+	}()
+
 	pid := cmd.Process.Pid
 
 	// Close log file in parent (child has its own descriptor)
@@ -65,7 +73,6 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 		if stopErr := cmd.Process.Kill(); stopErr != nil {
 			return 0, errors.Join(fmt.Errorf("failed to close log file: %w", err), fmt.Errorf("failed to stop started process: %w", stopErr))
 		}
-		_ = cmd.Wait()
 		return 0, fmt.Errorf("failed to close log file: %w", err)
 	}
 
@@ -75,9 +82,20 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 		return 0, fmt.Errorf("failed to write PID file: %w", err)
 	}
 
-	// Verify process stayed alive
-	time.Sleep(1 * time.Second)
+	// Verify process stayed alive through the startup window.
+	timer := time.NewTimer(1 * time.Second)
+	defer timer.Stop()
+	select {
+	case waitErr := <-exited:
+		_ = os.Remove(pidPath)
+		if waitErr != nil {
+			return 0, fmt.Errorf("process %s failed to stay running (check logs: %s): %w", name, logPath, waitErr)
+		}
+		return 0, fmt.Errorf("process %s exited during startup (check logs: %s)", name, logPath)
+	case <-timer.C:
+	}
 	if !isProcessRunning(pid) {
+		_ = os.Remove(pidPath)
 		return 0, fmt.Errorf("process %s failed to stay running (check logs: %s)", name, logPath)
 	}
 

@@ -20,6 +20,15 @@ This guide walks you through setting up a **local, pseudo-distributed** data eng
 
 ***Note**: By default, `local-data` uses Derby metastore (no external DB setup required). For Postgres/MySQL, see [METASTORE_SETUP.md](docs/METASTORE_SETUP.md).*
 
+### Contributor test lanes
+
+`make test-integration` is hermetic: it builds the real CLI and uses
+deterministic external-command shims, so Hadoop/Hive/Spark do not need to be
+installed. `make test-integration-live` is an explicit macOS-only smoke lane.
+It requires Homebrew Hadoop, Hive, Spark, Java 17, and unused default service
+ports; it isolates runtime state in a temporary home directory and stops
+services during cleanup.
+
 ---
 
 ## Installation
