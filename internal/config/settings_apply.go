@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
@@ -20,48 +21,81 @@ func NewSettingsApplier(paths *Paths) *SettingsApplier {
 
 // Apply propagates a setting change to relevant generated config files.
 func (a *SettingsApplier) Apply(key, oldValue, newValue string) error {
-	switch key {
-	case "db-type":
-		sm := NewSettingsManager(a.paths)
-		settings, err := sm.LoadOrDefault()
+	_ = oldValue
+	return withConfigLock(a.paths, func() error {
+		if key == "base-dir" {
+			return nil
+		}
+		settings, err := NewSettingsManager(a.paths).loadOrDefaultUnlocked()
 		if err != nil {
 			return err
 		}
-		dbType, err := metastore.NormalizeDBType(settings.DBType)
+		var update func(*util.HadoopConfiguration) error
+		switch key {
+		case "db-type":
+			dbType, err := metastore.NormalizeDBType(settings.DBType)
+			if err != nil {
+				return err
+			}
+			update = func(cfg *util.HadoopConfiguration) error {
+				cfg.SetProperty("javax.jdo.option.ConnectionDriverName", metastore.DriverClass(dbType))
+				cfg.SetProperty("javax.jdo.option.ConnectionURL", settings.DBURL)
+				cfg.SetProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, settings.User))
+				return nil
+			}
+		case "db-url":
+			update = func(cfg *util.HadoopConfiguration) error {
+				cfg.SetProperty("javax.jdo.option.ConnectionURL", newValue)
+				return nil
+			}
+		case "db-password":
+			update = func(cfg *util.HadoopConfiguration) error {
+				cfg.SetProperty("javax.jdo.option.ConnectionPassword", newValue)
+				return nil
+			}
+		case "user":
+			dbType, err := metastore.NormalizeDBType(settings.DBType)
+			if err != nil {
+				return err
+			}
+			update = func(cfg *util.HadoopConfiguration) error {
+				cfg.SetProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, newValue))
+				return nil
+			}
+		default:
+			return fmt.Errorf("unknown setting key %q", key)
+		}
+		transactionID := newTransactionID()
+		entries, err := a.stageHiveUpdate(transactionID, update)
 		if err != nil {
 			return err
 		}
-		if err := a.updateHiveProperty("javax.jdo.option.ConnectionDriverName", metastore.DriverClass(dbType)); err != nil {
-			return err
-		}
-		if err := a.updateHiveProperty("javax.jdo.option.ConnectionURL", settings.DBURL); err != nil {
-			return err
-		}
-		return a.updateHiveProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, settings.User))
-	case "db-url":
-		return a.updateHiveProperty("javax.jdo.option.ConnectionURL", newValue)
-	case "db-password":
-		return a.updateHiveProperty("javax.jdo.option.ConnectionPassword", newValue)
-	case "user":
-		sm := NewSettingsManager(a.paths)
-		settings, err := sm.LoadOrDefault()
-		if err != nil {
-			return err
-		}
-		dbType, err := metastore.NormalizeDBType(settings.DBType)
-		if err != nil {
-			return err
-		}
-		return a.updateHiveProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, newValue))
-	case "base-dir":
-		// Base dir is forward-only and applies on future generation.
-		return nil
-	default:
-		return fmt.Errorf("unknown setting key %q", key)
-	}
+		return publishStaged(a.paths, transactionID, entries)
+	})
 }
 
-func (a *SettingsApplier) updateHiveProperty(property, value string) error {
+func (a *SettingsApplier) stageHiveSettings(settings *Settings, transactionID string) ([]stagedReplacement, error) {
+	dbType, err := metastore.NormalizeDBType(settings.DBType)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.stageHiveUpdate(transactionID, func(cfg *util.HadoopConfiguration) error {
+		cfg.SetProperty("javax.jdo.option.ConnectionDriverName", metastore.DriverClass(dbType))
+		cfg.SetProperty("javax.jdo.option.ConnectionURL", settings.DBURL)
+		cfg.SetProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, settings.User))
+		cfg.SetProperty("javax.jdo.option.ConnectionPassword", settings.DBPassword)
+		return nil
+	})
+}
+
+func (a *SettingsApplier) stageHiveUpdate(transactionID string, update func(*util.HadoopConfiguration) error) ([]stagedReplacement, error) {
+	var entries []stagedReplacement
+	cleanup := func() {
+		for _, staged := range entries {
+			_ = os.RemoveAll(staged.Stage)
+		}
+	}
 	for _, path := range a.hiveSiteTargets() {
 		if !util.FileExists(path) {
 			continue
@@ -69,14 +103,27 @@ func (a *SettingsApplier) updateHiveProperty(property, value string) error {
 
 		cfg, err := util.ParseHadoopXML(path)
 		if err != nil {
-			return fmt.Errorf("failed parsing %s: %w", path, err)
+			cleanup()
+			return nil, fmt.Errorf("failed parsing %s: %w", path, err)
 		}
-		cfg.SetProperty(property, value)
-		if err := cfg.WriteXML(path); err != nil {
-			return fmt.Errorf("failed writing %s: %w", path, err)
+		if err := update(cfg); err != nil {
+			cleanup()
+			return nil, err
 		}
+
+		entry := newStagedReplacement(path, "hive-xml:"+relativeConfigPath(a.paths, path), transactionID)
+		if err := a.paths.runConfigHook("xml.write:" + relativeConfigPath(a.paths, path)); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if err := cfg.WriteXML(entry.Stage); err != nil {
+			_ = os.RemoveAll(entry.Stage)
+			cleanup()
+			return nil, fmt.Errorf("failed writing staged %s: %w", path, err)
+		}
+		entries = append(entries, entry)
 	}
-	return nil
+	return entries, nil
 }
 
 func (a *SettingsApplier) hiveSiteTargets() []string {

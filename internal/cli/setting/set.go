@@ -65,54 +65,44 @@ db-password must not be passed as a command-line argument. Use one of:
 			paths := pathsGetter()
 
 			sm := config.NewSettingsManager(paths)
-			settings, err := sm.LoadOrDefault()
-			if err != nil {
-				return err
-			}
-			oldValue := settingValue(settings, key)
+			if err := sm.UpdateAndApply(func(settings *config.Settings) error {
+				switch key {
+				case "user":
+					settings.User = value
+				case "base-dir":
+					return fmt.Errorf("base-dir is static and cannot be changed via 'local-data setting set'")
+				case "db-type":
+					dbType, err := metastore.NormalizeDBType(value)
+					if err != nil {
+						return err
+					}
+					settings.DBType = string(dbType)
+					if metastore.InferDBTypeFromURL(settings.DBURL) != dbType {
+						if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: db-url %q does not match db-type %q; resetting db-url to default.\n", util.RedactJDBCURL(settings.DBURL), settings.DBType); err != nil {
+							return err
+						}
+						settings.DBURL = metastore.DefaultDBURLForBase(dbType, paths.BaseDir)
+					}
+				case "db-url":
+					settings.DBURL = value
+				case "db-password":
+					settings.DBPassword = value
+				default:
+					return fmt.Errorf("unknown setting key %q (supported: user, db-type, db-url, db-password)", key)
+				}
 
-			switch key {
-			case "user":
-				settings.User = value
-			case "base-dir":
-				return fmt.Errorf("base-dir is static and cannot be changed via 'local-data setting set'")
-			case "db-type":
-				dbType, err := metastore.NormalizeDBType(value)
+				dbType, err := metastore.NormalizeDBType(settings.DBType)
 				if err != nil {
 					return err
 				}
-				settings.DBType = string(dbType)
-				if metastore.InferDBTypeFromURL(settings.DBURL) != dbType {
-					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: db-url %q does not match db-type %q; resetting db-url to default.\n", util.RedactJDBCURL(settings.DBURL), settings.DBType); err != nil {
-						return err
+				if err := metastore.ValidateURL(dbType, settings.DBURL); err != nil {
+					if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err); writeErr != nil {
+						return writeErr
 					}
-					settings.DBURL = metastore.DefaultDBURLForBase(dbType, paths.BaseDir)
+					return fmt.Errorf("db-type and db-url must match")
 				}
-			case "db-url":
-				settings.DBURL = value
-			case "db-password":
-				settings.DBPassword = value
-			default:
-				return fmt.Errorf("unknown setting key %q (supported: user, db-type, db-url, db-password)", key)
-			}
-
-			dbType, err := metastore.NormalizeDBType(settings.DBType)
-			if err != nil {
-				return err
-			}
-			if err := metastore.ValidateURL(dbType, settings.DBURL); err != nil {
-				if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: %v\n", err); writeErr != nil {
-					return writeErr
-				}
-				return fmt.Errorf("db-type and db-url must match")
-			}
-
-			if err := sm.Save(settings); err != nil {
-				return err
-			}
-
-			applier := config.NewSettingsApplier(paths)
-			if err := applier.Apply(key, oldValue, value); err != nil {
+				return nil
+			}); err != nil {
 				return err
 			}
 
@@ -153,21 +143,4 @@ func resolveDBPassword(cmd *cobra.Command, positional, fromFile string, fromStdi
 		prompt = "Enter db-password: "
 	}
 	return util.ReadSecret(in, cmd.OutOrStdout(), prompt)
-}
-
-func settingValue(settings *config.Settings, key string) string {
-	switch key {
-	case "user":
-		return settings.User
-	case "base-dir":
-		return settings.BaseDir
-	case "db-type":
-		return settings.DBType
-	case "db-url":
-		return settings.DBURL
-	case "db-password":
-		return settings.DBPassword
-	default:
-		return ""
-	}
 }
