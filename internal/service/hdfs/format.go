@@ -122,6 +122,12 @@ func verifyFormattedNameNodeStorage(dirs []string) error {
 // EnsureNameNodeFormatted checks if NameNode is formatted and formats it if needed
 // Mirrors ld_hdfs_ensure_namenode_formatted
 func EnsureNameNodeFormatted(hadoopConfDir string) error {
+	return EnsureNameNodeFormattedWithEnv(hadoopConfDir, nil)
+}
+
+// EnsureNameNodeFormattedWithEnv formats a first-use NameNode using the same
+// environment contract as the service processes that will use its storage.
+func EnsureNameNodeFormattedWithEnv(hadoopConfDir string, runtimeEnv []string) error {
 	// Parse namenode directories from hdfs-site.xml
 	hdfsConf := filepath.Join(hadoopConfDir, "hdfs-site.xml")
 	dirs, err := util.ParseNameNodeDirs(hdfsConf)
@@ -169,7 +175,7 @@ func EnsureNameNodeFormatted(hadoopConfDir string) error {
 	}
 
 	util.Log("Formatting NameNode (first time)")
-	if err := formatNameNodeForFormat(hadoopConfDir); err != nil {
+	if err := formatNameNodeForFormat(hadoopConfDir, runtimeEnv); err != nil {
 		return fmt.Errorf("failed to format NameNode: %w", err)
 	}
 	if err := verifyFormattedNameNodeStorage(dirs); err != nil {
@@ -180,11 +186,10 @@ func EnsureNameNodeFormatted(hadoopConfDir string) error {
 }
 
 // formatNameNode runs the HDFS namenode format command
-func formatNameNode(hadoopConfDir string) error {
+func formatNameNode(hadoopConfDir string, runtimeEnv []string) error {
 	cmd := exec.Command("hdfs", "namenode", "-format", "-force", "-nonInteractive")
 
-	// Set HADOOP_CONF_DIR so format uses the correct configuration
-	cmd.Env = append(os.Environ(), "HADOOP_CONF_DIR="+hadoopConfDir)
+	cmd.Env = withHadoopConfDir(runtimeEnv, hadoopConfDir)
 
 	// Capture output to show on error
 	output, err := cmd.CombinedOutput()
@@ -198,6 +203,19 @@ func formatNameNode(hadoopConfDir string) error {
 	}
 
 	return nil
+}
+
+func withHadoopConfDir(runtimeEnv []string, hadoopConfDir string) []string {
+	if runtimeEnv == nil {
+		runtimeEnv = os.Environ()
+	}
+	result := make([]string, 0, len(runtimeEnv)+1)
+	for _, entry := range runtimeEnv {
+		if !strings.HasPrefix(entry, "HADOOP_CONF_DIR=") {
+			result = append(result, entry)
+		}
+	}
+	return append(result, "HADOOP_CONF_DIR="+hadoopConfDir)
 }
 
 // EnsureLocalStorageDirs creates the local filesystem directories needed by HDFS
@@ -238,9 +256,7 @@ func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
 			cmd.Env = env
 		}
 		if err := cmd.Run(); err != nil {
-			// Log warning but don't fail - directory might already exist
-			util.Warn("Failed to create HDFS directory %s: %v", dir.path, err)
-			continue
+			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, env, err)
 		}
 
 		// Set permissions if specified
@@ -250,7 +266,7 @@ func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
 				cmd.Env = env
 			}
 			if err := cmd.Run(); err != nil {
-				util.Warn("Failed to set permissions on %s: %v", dir.path, err)
+				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, env, err)
 			}
 		}
 	}
@@ -278,7 +294,7 @@ func EnsureSparkHistoryDir(env []string) error {
 		cmd.Env = env
 	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create /spark-history: %w", err)
+		return hdfsControlCommandError("hdfs dfs -mkdir -p /spark-history", env, err)
 	}
 
 	// Set permissions
@@ -287,7 +303,7 @@ func EnsureSparkHistoryDir(env []string) error {
 		cmd.Env = env
 	}
 	if err := cmd.Run(); err != nil {
-		util.Warn("Failed to set permissions on /spark-history: %v", err)
+		return hdfsControlCommandError("hdfs dfs -chmod 1777 /spark-history", env, err)
 	}
 
 	return nil

@@ -20,8 +20,8 @@ type HDFSService struct {
 	env     *env.Environment
 	procMgr *service.ProcessManager
 
-	startNameNodeHook func(context.Context) (bool, error)
-	startDataNodeHook func(context.Context) (bool, error)
+	startNameNodeHook func(context.Context, []string) (bool, error)
+	startDataNodeHook func(context.Context, []string) (bool, error)
 	waitSafeModeHook  func(context.Context, int, []string) error
 	verifyDaemonHook  func(string) error
 	createDirsHook    func([]string) error
@@ -70,8 +70,11 @@ func (h *HDFSService) StartContext(ctx context.Context) (service.StartResult, er
 		return service.StartResult{}, err
 	}
 
-	// Ensure NameNode is formatted
-	if err := EnsureNameNodeFormatted(h.env.HadoopConfDir); err != nil {
+	runtimeEnv := h.env.MergeWithCurrent()
+
+	// Ensure NameNode is formatted with the same active overlay as all
+	// subsequent daemon and control commands.
+	if err := EnsureNameNodeFormattedWithEnv(h.env.HadoopConfDir, runtimeEnv); err != nil {
 		return service.StartResult{}, err
 	}
 
@@ -81,7 +84,6 @@ func (h *HDFSService) StartContext(ctx context.Context) (service.StartResult, er
 		return service.StartResult{}, err
 	}
 
-	runtimeEnv := h.env.MergeWithCurrent()
 	return h.startComponents(ctx, runtimeEnv, hdfsPaths)
 }
 
@@ -89,13 +91,13 @@ func (h *HDFSService) startComponents(ctx context.Context, runtimeEnv []string, 
 	return service.RunStartSteps(ctx, []service.StartStep{
 		{
 			Name:  "namenode",
-			Start: h.startNameNodeStep,
+			Start: func(ctx context.Context) (bool, error) { return h.startNameNodeStep(ctx, runtimeEnv) },
 			Ready: func(context.Context) error { return h.verifyDaemonStep("namenode") },
 			Stop:  func() error { return h.stopStarted("namenode") },
 		},
 		{
 			Name:  "datanode",
-			Start: h.startDataNodeStep,
+			Start: func(ctx context.Context) (bool, error) { return h.startDataNodeStep(ctx, runtimeEnv) },
 			Ready: func(ctx context.Context) error {
 				if err := h.verifyDaemonStep("datanode"); err != nil {
 					return err
@@ -125,18 +127,18 @@ func (h *HDFSService) verifyDaemonStep(name string) error {
 	return h.verifyDaemon(name)
 }
 
-func (h *HDFSService) startNameNodeStep(ctx context.Context) (bool, error) {
+func (h *HDFSService) startNameNodeStep(ctx context.Context, runtimeEnv []string) (bool, error) {
 	if h.startNameNodeHook != nil {
-		return h.startNameNodeHook(ctx)
+		return h.startNameNodeHook(ctx, runtimeEnv)
 	}
-	return h.startNameNode()
+	return h.startNameNode(runtimeEnv)
 }
 
-func (h *HDFSService) startDataNodeStep(ctx context.Context) (bool, error) {
+func (h *HDFSService) startDataNodeStep(ctx context.Context, runtimeEnv []string) (bool, error) {
 	if h.startDataNodeHook != nil {
-		return h.startDataNodeHook(ctx)
+		return h.startDataNodeHook(ctx, runtimeEnv)
 	}
-	return h.startDataNode()
+	return h.startDataNode(runtimeEnv)
 }
 
 func (h *HDFSService) createCommonDirectories(runtimeEnv []string) error {
@@ -153,7 +155,7 @@ func (h *HDFSService) createCommonDirectories(runtimeEnv []string) error {
 }
 
 // startNameNode starts the NameNode process
-func (h *HDFSService) startNameNode() (bool, error) {
+func (h *HDFSService) startNameNode(runtimeEnv []string) (bool, error) {
 	// Check if already running
 	pid, _ := h.procMgr.Status("namenode")
 	foundByPIDFile := pid != 0
@@ -187,7 +189,7 @@ func (h *HDFSService) startNameNode() (bool, error) {
 
 	// Start NameNode
 	cmd := exec.Command("hdfs", "namenode")
-	cmd.Env = h.env.MergeWithCurrent()
+	cmd.Env = runtimeEnv
 
 	pid, err := h.procMgr.Start("namenode", cmd, "namenode.log")
 	if err != nil {
@@ -199,7 +201,7 @@ func (h *HDFSService) startNameNode() (bool, error) {
 }
 
 // startDataNode starts the DataNode process
-func (h *HDFSService) startDataNode() (bool, error) {
+func (h *HDFSService) startDataNode(runtimeEnv []string) (bool, error) {
 	// Check if already running
 	pid, _ := h.procMgr.Status("datanode")
 	foundByPIDFile := pid != 0
@@ -233,7 +235,7 @@ func (h *HDFSService) startDataNode() (bool, error) {
 
 	// Start DataNode
 	cmd := exec.Command("hdfs", "datanode")
-	cmd.Env = h.env.MergeWithCurrent()
+	cmd.Env = runtimeEnv
 
 	pid, err := h.procMgr.Start("datanode", cmd, "datanode.log")
 	if err != nil {
