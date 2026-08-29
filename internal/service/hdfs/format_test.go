@@ -3,6 +3,7 @@ package hdfs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/util"
@@ -20,6 +21,35 @@ func writeFormatTestFile(t *testing.T, path string, data []byte) {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("failed to write test file %s: %v", path, err)
 	}
+}
+
+func writeNameNodeConfig(t *testing.T, confDir string, dirs ...string) {
+	t.Helper()
+	values := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		values = append(values, "file://"+dir)
+	}
+	writeFormatTestFile(t, filepath.Join(confDir, "hdfs-site.xml"), []byte(`<?xml version="1.0"?>
+<configuration><property><name>dfs.namenode.name.dir</name><value>`+strings.Join(values, ",")+`</value></property></configuration>`))
+}
+
+func writeValidNameNodeVersion(t *testing.T, dir, storageID, clusterID string) {
+	t.Helper()
+	versionDir := filepath.Join(dir, "current")
+	mkdirFormatTestDir(t, versionDir)
+	writeFormatTestFile(t, filepath.Join(versionDir, "VERSION"), []byte("storageType=NAME_NODE\nlayoutVersion=-63\nnamespaceID=12345\ncTime=1700000000000\nclusterID="+clusterID+"\nstorageID="+storageID+"\n"))
+}
+
+func replaceFormatFunctions(t *testing.T, find func() (int, error), format func(string) error) {
+	t.Helper()
+	originalFind := findNameNodePIDForFormat
+	originalFormat := formatNameNodeForFormat
+	findNameNodePIDForFormat = find
+	formatNameNodeForFormat = format
+	t.Cleanup(func() {
+		findNameNodePIDForFormat = originalFind
+		formatNameNodeForFormat = originalFormat
+	})
 }
 
 func TestEnsureLocalStorageDirs(t *testing.T) {
@@ -81,104 +111,157 @@ func TestCreateCommonHDFSDirs_Structure(t *testing.T) {
 	_ = err // Ignore error in unit tests
 }
 
-func TestEnsureNameNodeFormatted_NoConfig(t *testing.T) {
-	// Test with a non-existent config directory
+func TestEnsureNameNodeFormatted_MissingConfigFailsClosed(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "nonexistent")
 
-	// Should not error - just skips formatting
+	err := EnsureNameNodeFormatted(confDir)
+	if err == nil || !strings.Contains(err.Error(), "cannot validate NameNode storage configuration") {
+		t.Fatalf("EnsureNameNodeFormatted() error = %v, want actionable configuration error", err)
+	}
+}
+
+func TestEnsureNameNodeFormatted_MalformedAndMissingPropertyFailClosed(t *testing.T) {
+	for _, content := range []string{
+		`<configuration><property><name>dfs.namenode.name.dir</name>`,
+		`<configuration><property><name>other.property</name><value>value</value></property></configuration>`,
+	} {
+		tmpDir := t.TempDir()
+		confDir := filepath.Join(tmpDir, "conf")
+		mkdirFormatTestDir(t, confDir)
+		writeFormatTestFile(t, filepath.Join(confDir, "hdfs-site.xml"), []byte(content))
+		if err := EnsureNameNodeFormatted(confDir); err == nil || !strings.Contains(err.Error(), "cannot validate NameNode storage configuration") {
+			t.Errorf("EnsureNameNodeFormatted() error = %v, want actionable configuration error", err)
+		}
+	}
+}
+
+func TestEnsureNameNodeFormatted_AllConfiguredDirectoriesFormatted(t *testing.T) {
+	tmpDir := t.TempDir()
+	confDir := filepath.Join(tmpDir, "conf")
+	mkdirFormatTestDir(t, confDir)
+	dirOne := filepath.Join(tmpDir, "namenode-one")
+	dirTwo := filepath.Join(tmpDir, "namenode-two")
+	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
+	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err != nil {
-		t.Errorf("EnsureNameNodeFormatted() with no config should not error, got: %v", err)
+		t.Fatalf("EnsureNameNodeFormatted() error = %v", err)
+	}
+	if formatCalls != 0 {
+		t.Fatalf("format calls = %d, want 0", formatCalls)
 	}
 }
 
-func TestEnsureNameNodeFormatted_AlreadyFormatted(t *testing.T) {
+func TestEnsureNameNodeFormatted_InconsistentFormattedDirectoriesFailClosed(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
 	mkdirFormatTestDir(t, confDir)
-
-	// Create hdfs-site.xml with namenode dir configuration
-	nameNodeDir := filepath.Join(tmpDir, "namenode")
-	hdfsConfig := `<?xml version="1.0"?>
-<configuration>
-  <property>
-    <name>dfs.namenode.name.dir</name>
-    <value>file://` + nameNodeDir + `</value>
-  </property>
-</configuration>`
-
-	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
-
-	// Create VERSION file to simulate already formatted namenode
-	versionDir := filepath.Join(nameNodeDir, "current")
-	mkdirFormatTestDir(t, versionDir)
-	versionFile := filepath.Join(versionDir, "VERSION")
-	writeFormatTestFile(t, versionFile, []byte("test version"))
-
-	// Should not try to format since VERSION file exists
+	dirOne := filepath.Join(tmpDir, "namenode-one")
+	dirTwo := filepath.Join(tmpDir, "namenode-two")
+	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
+	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-two")
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
-	if err != nil {
-		t.Errorf("EnsureNameNodeFormatted() with formatted namenode error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "identity differs") {
+		t.Fatalf("EnsureNameNodeFormatted() error = %v, want identity mismatch error", err)
+	}
+	if formatCalls != 0 {
+		t.Fatalf("format calls = %d, want 0", formatCalls)
 	}
 }
 
-func TestEnsureNameNodeFormatted_NonEmptyDirectory(t *testing.T) {
+func TestEnsureNameNodeFormatted_AllEmptyDirectoriesFormatsOnceAndVerifiesAll(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
 	mkdirFormatTestDir(t, confDir)
-
-	// Create hdfs-site.xml with namenode dir configuration
-	nameNodeDir := filepath.Join(tmpDir, "namenode")
-	hdfsConfig := `<?xml version="1.0"?>
-<configuration>
-  <property>
-    <name>dfs.namenode.name.dir</name>
-    <value>file://` + nameNodeDir + `</value>
-  </property>
-</configuration>`
-
-	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
-
-	// Create namenode dir with a file (but no VERSION file)
-	mkdirFormatTestDir(t, nameNodeDir)
-	writeFormatTestFile(t, filepath.Join(nameNodeDir, "somefile.txt"), []byte("data"))
-
-	// Should return error - directory is not empty and not formatted
-	err := EnsureNameNodeFormatted(confDir)
-	if err == nil {
-		t.Error("EnsureNameNodeFormatted() with non-empty unformatted directory should error")
+	dirOne := filepath.Join(tmpDir, "namenode-one")
+	dirTwo := filepath.Join(tmpDir, "namenode-two")
+	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+	mkdirFormatTestDir(t, dirOne)
+	mkdirFormatTestDir(t, dirTwo)
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error {
+		formatCalls++
+		writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
+		writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
+		return nil
+	})
+	if err := EnsureNameNodeFormatted(confDir); err != nil {
+		t.Fatalf("EnsureNameNodeFormatted() error = %v", err)
+	}
+	if formatCalls != 1 {
+		t.Fatalf("format calls = %d, want 1", formatCalls)
 	}
 }
 
-func TestEnsureNameNodeFormatted_EmptyDirectory(t *testing.T) {
+func TestEnsureNameNodeFormatted_MixedStorageFailsWithoutFormatting(t *testing.T) {
+	for _, state := range []string{"missing", "non-empty"} {
+		t.Run(state, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			confDir := filepath.Join(tmpDir, "conf")
+			mkdirFormatTestDir(t, confDir)
+			dirOne := filepath.Join(tmpDir, "namenode-one")
+			dirTwo := filepath.Join(tmpDir, "namenode-two")
+			writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+			writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
+			if state == "non-empty" {
+				mkdirFormatTestDir(t, dirTwo)
+				writeFormatTestFile(t, filepath.Join(dirTwo, "unrelated"), []byte("data"))
+			}
+			formatCalls := 0
+			replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+			err := EnsureNameNodeFormatted(confDir)
+			if err == nil {
+				t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
+			}
+			if formatCalls != 0 {
+				t.Fatalf("format calls = %d, want 0", formatCalls)
+			}
+		})
+	}
+}
+
+func TestEnsureNameNodeFormatted_NonEmptyAndInvalidVersionFailClosed(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "conf")
 	mkdirFormatTestDir(t, confDir)
+	dirOne := filepath.Join(tmpDir, "namenode-one")
+	dirTwo := filepath.Join(tmpDir, "namenode-two")
+	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+	mkdirFormatTestDir(t, dirOne)
+	writeFormatTestFile(t, filepath.Join(dirOne, "unrelated"), []byte("data"))
+	mkdirFormatTestDir(t, filepath.Join(dirTwo, "current"))
+	writeFormatTestFile(t, filepath.Join(dirTwo, "current", "VERSION"), []byte("not a Hadoop VERSION file"))
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+	if err := EnsureNameNodeFormatted(confDir); err == nil {
+		t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
+	}
+	if formatCalls != 0 {
+		t.Fatalf("format calls = %d, want 0", formatCalls)
+	}
+}
 
-	// Create hdfs-site.xml with namenode dir configuration
-	nameNodeDir := filepath.Join(tmpDir, "namenode")
-	hdfsConfig := `<?xml version="1.0"?>
-<configuration>
-  <property>
-    <name>dfs.namenode.name.dir</name>
-    <value>file://` + nameNodeDir + `</value>
-  </property>
-</configuration>`
-
-	hdfsConfFile := filepath.Join(confDir, "hdfs-site.xml")
-	writeFormatTestFile(t, hdfsConfFile, []byte(hdfsConfig))
-
-	// Create empty namenode directory
-	mkdirFormatTestDir(t, nameNodeDir)
-
-	// Should try to format (will fail in unit tests since hdfs command not available)
-	// but we're testing the logic path
+func TestEnsureNameNodeFormatted_RunningNameNodePreventsFormatting(t *testing.T) {
+	tmpDir := t.TempDir()
+	confDir := filepath.Join(tmpDir, "conf")
+	mkdirFormatTestDir(t, confDir)
+	dirOne := filepath.Join(tmpDir, "namenode-one")
+	dirTwo := filepath.Join(tmpDir, "namenode-two")
+	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 4242, nil }, func(string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
-
-	// In unit tests without hdfs installed, we expect an error
-	// The important thing is it attempted to format (not skipped)
-	_ = err // Expected to fail in unit test environment
+	if err == nil || !strings.Contains(err.Error(), "4242") || !strings.Contains(err.Error(), dirOne) || !strings.Contains(err.Error(), dirTwo) {
+		t.Fatalf("EnsureNameNodeFormatted() error = %v, want PID and storage paths", err)
+	}
+	if formatCalls != 0 {
+		t.Fatalf("format calls = %d, want 0", formatCalls)
+	}
 }
