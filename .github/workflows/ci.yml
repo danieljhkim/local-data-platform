@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# This workflow never needs repository writes or secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          # Do not share dependency or build caches across untrusted PRs.
+          cache: false
+
+      - name: Verify formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -l $(git ls-files '*.go') | tee /tmp/gofmt.out
+          test ! -s /tmp/gofmt.out
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race test internal packages
+        run: go test -race ./internal/...
+
+      - name: Build production binary
+        run: go build -o bin/local-data ./cmd/local-data
+
+      - name: Check release workflow security
+        run: bash test/release_workflow_security_test.sh
+
+      - name: Lint workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml

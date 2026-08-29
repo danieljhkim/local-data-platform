@@ -178,6 +178,25 @@ make lint  # Requires golangci-lint
 make clean
 ```
 
+### CI-equivalent checks
+
+GitHub Actions runs the following commands for every pull request and push to
+`main`. Run the same sequence locally before opening a pull request:
+
+```bash
+gofmt -l $(git ls-files '*.go') | tee /tmp/gofmt.out
+test ! -s /tmp/gofmt.out
+go vet ./...
+go test ./...
+go test -race ./internal/...
+go build -o bin/local-data ./cmd/local-data
+bash test/release_workflow_security_test.sh
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml
+```
+
+The workflow deliberately disables dependency and build caching: pull-request
+code must not populate executable cache content later used by a trusted branch.
+
 ### Project Structure
 
 ```
