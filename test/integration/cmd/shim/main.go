@@ -78,7 +78,8 @@ func runHDFS(args []string) {
 		if err := os.MkdirAll(versionDir, 0o755); err != nil {
 			fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(versionDir, "VERSION"), []byte("clusterID=integration\n"), 0o644); err != nil {
+		version := "storageType=NAME_NODE\nlayoutVersion=-63\nnamespaceID=12345\ncTime=1700000000000\nclusterID=integration\nstorageID=integration-namenode\n"
+		if err := os.WriteFile(filepath.Join(versionDir, "VERSION"), []byte(version), 0o644); err != nil {
 			fatal(err)
 		}
 		return

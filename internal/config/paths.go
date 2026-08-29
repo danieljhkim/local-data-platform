@@ -5,6 +5,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -14,6 +15,12 @@ import (
 type Paths struct {
 	RepoRoot string // Repository root directory
 	BaseDir  string // Base directory for runtime state ($BASE_DIR)
+
+	// These knobs are intentionally private. They make lock contention and
+	// publish failures deterministic in package tests without changing the
+	// public configuration surface.
+	lockTimeout time.Duration
+	testHook    func(string) error
 }
 
 // NewPaths creates a new Paths instance
@@ -24,8 +31,9 @@ func NewPaths(repoRoot, baseDir string) *Paths {
 		baseDir = DefaultBaseDir()
 	}
 	return &Paths{
-		RepoRoot: repoRoot,
-		BaseDir:  baseDir,
+		RepoRoot:    repoRoot,
+		BaseDir:     baseDir,
+		lockTimeout: defaultConfigLockTimeout,
 	}
 }
 
@@ -169,6 +177,16 @@ func (p *Paths) HadoopTmpDir() string {
 // Returns "local" as default if no profile is set
 // Mirrors ld_active_profile
 func (p *Paths) ActiveProfile() (string, error) {
+	var profile string
+	err := withConfigLock(p, func() error {
+		var err error
+		profile, err = p.activeProfileUnlocked()
+		return err
+	})
+	return profile, err
+}
+
+func (p *Paths) activeProfileUnlocked() (string, error) {
 	profileFile := p.ActiveProfileFile()
 
 	if !util.FileExists(profileFile) {
@@ -190,11 +208,5 @@ func (p *Paths) ActiveProfile() (string, error) {
 
 // SetActiveProfile writes the active profile name to the marker file
 func (p *Paths) SetActiveProfile(profile string) error {
-	// Ensure conf directory exists
-	if err := util.MkdirAll(p.ConfRootDir()); err != nil {
-		return err
-	}
-
-	profileFile := p.ActiveProfileFile()
-	return os.WriteFile(profileFile, []byte(profile), 0644)
+	return NewProfileManager(p).Set(profile)
 }

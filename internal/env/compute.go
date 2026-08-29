@@ -44,13 +44,9 @@ type Environment struct {
 func Compute(paths *config.Paths) (*Environment, error) {
 	// Ensure overlay exists before computing env (keeps wrappers hermetic)
 	pm := config.NewProfileManager(paths)
-	activeProfile, err := paths.ActiveProfile()
+	// Read the marker and publish its overlay under one configuration lock.
+	activeProfile, err := pm.ApplyActive()
 	if err != nil {
-		return nil, err
-	}
-
-	// Apply overlay silently (no output)
-	if err := pm.Apply(activeProfile); err != nil {
 		return nil, fmt.Errorf("failed to apply profile overlay: %w", err)
 	}
 

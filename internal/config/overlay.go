@@ -30,67 +30,88 @@ func (pm *ProfileManager) IsInitialized() bool {
 
 // Init initializes profiles using the Go struct generator
 func (pm *ProfileManager) Init(force bool, opts *generator.InitOptions) error {
-	dst := pm.paths.UserProfilesDir()
-	sm := NewSettingsManager(pm.paths)
+	return withConfigLock(pm.paths, func() error {
+		dst := pm.paths.UserProfilesDir()
+		sm := NewSettingsManager(pm.paths)
+		effectiveOpts, settingsToPersist, err := pm.resolveInitOptions(sm, opts)
+		if err != nil {
+			return err
+		}
+		if err := util.MkdirAll(filepath.Dir(dst)); err != nil {
+			return err
+		}
 
-	effectiveOpts, settingsToPersist, err := pm.resolveInitOptions(sm, opts)
-	if err != nil {
-		return err
-	}
+		transactionID := newTransactionID()
+		profilesEntry := newStagedReplacement(dst, "profiles", transactionID)
+		cleanup := func(entries ...stagedReplacement) {
+			for _, entry := range entries {
+				_ = os.RemoveAll(entry.Stage)
+			}
+		}
 
-	// Check if destination already exists
-	if util.DirExists(dst) {
-		if force {
-			util.Log("Re-initializing profiles (overwriting): %s", dst)
-			if err := os.RemoveAll(dst); err != nil {
-				return fmt.Errorf("failed to remove existing profiles: %w", err)
+		if util.DirExists(dst) && !force {
+			if err := util.CopyDir(dst, profilesEntry.Stage); err != nil {
+				return fmt.Errorf("failed to stage existing profiles: %w", err)
+			}
+			if err := pm.paths.runConfigHook("profiles.copy"); err != nil {
+				cleanup(profilesEntry)
+				return err
+			}
+			if err := applySettingsUnder(profilesEntry.Stage, settingsToPersist); err != nil {
+				cleanup(profilesEntry)
+				return fmt.Errorf("failed to stage profile settings: %w", err)
 			}
 		} else {
-			// Keep existing files, but sync mutable settings into generated Hive XML.
-			applier := NewSettingsApplier(pm.paths)
-			if err := applier.Apply("db-type", "", effectiveOpts.DBType); err != nil {
-				return fmt.Errorf("failed to sync db-type setting: %w", err)
+			if force && util.DirExists(dst) {
+				util.Log("Re-initializing profiles (overwriting): %s", dst)
 			}
-			if err := applier.Apply("user", "", effectiveOpts.User); err != nil {
-				return fmt.Errorf("failed to sync user setting: %w", err)
+			util.Log("Generating profiles under: %s", dst)
+			gen := generator.NewConfigGenerator()
+			if err := gen.InitProfiles(pm.paths.BaseDir, profilesEntry.Stage, effectiveOpts); err != nil {
+				cleanup(profilesEntry)
+				return fmt.Errorf("failed to generate profiles: %w", err)
 			}
-			if err := applier.Apply("db-url", "", effectiveOpts.DBUrl); err != nil {
-				return fmt.Errorf("failed to sync db-url setting: %w", err)
+			if err := pm.paths.runConfigHook("profiles.generate"); err != nil {
+				cleanup(profilesEntry)
+				return err
 			}
-			if err := applier.Apply("db-password", "", effectiveOpts.DBPassword); err != nil {
-				return fmt.Errorf("failed to sync db-password setting: %w", err)
-			}
-			if err := sm.Save(settingsToPersist); err != nil {
-				return fmt.Errorf("failed to save settings: %w", err)
-			}
-			return nil
 		}
-	}
 
-	// Ensure parent directory exists
-	if err := util.MkdirAll(filepath.Dir(dst)); err != nil {
-		return err
-	}
+		settingsEntry, err := sm.stageSettings(settingsToPersist, transactionID)
+		if err != nil {
+			cleanup(profilesEntry)
+			return fmt.Errorf("failed to stage settings: %w", err)
+		}
+		entries := []stagedReplacement{profilesEntry}
 
-	util.Log("Generating profiles under: %s", dst)
+		// If an overlay is already published, replace it from the staged profile
+		// in the same transaction so init never leaves it stale.
+		if util.DirExists(pm.paths.CurrentConfDir()) {
+			active, err := pm.paths.activeProfileUnlocked()
+			if err != nil {
+				cleanup(profilesEntry, settingsEntry)
+				return err
+			}
+			overlayEntry, err := pm.stageOverlay(filepath.Join(profilesEntry.Stage, active), active, transactionID)
+			if err != nil {
+				cleanup(profilesEntry, settingsEntry)
+				return err
+			}
+			entries = append(entries, overlayEntry)
+		}
+		entries = append(entries, settingsEntry)
+		if err := publishStaged(pm.paths, transactionID, entries); err != nil {
+			return err
+		}
 
-	gen := generator.NewConfigGenerator()
-	if err := gen.InitProfiles(pm.paths.BaseDir, dst, effectiveOpts); err != nil {
-		return fmt.Errorf("failed to generate profiles: %w", err)
-	}
-
-	if err := sm.Save(settingsToPersist); err != nil {
-		return fmt.Errorf("failed to save settings: %w", err)
-	}
-
-	util.Success("Profiles initialized successfully")
-	util.Log("  Runtime config overlay: %s", pm.paths.CurrentConfDir())
-
-	return nil
+		util.Success("Profiles initialized successfully")
+		util.Log("  Runtime config overlay: %s", pm.paths.CurrentConfDir())
+		return nil
+	})
 }
 
 func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generator.InitOptions) (*generator.InitOptions, *Settings, error) {
-	settings, err := sm.LoadOrDefault()
+	settings, err := sm.loadOrDefaultUnlocked()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load settings: %w", err)
 	}
@@ -139,6 +160,16 @@ func (pm *ProfileManager) resolveInitOptions(sm *SettingsManager, opts *generato
 
 // List returns a sorted list of available profile names
 func (pm *ProfileManager) List() ([]string, error) {
+	var profiles []string
+	err := withConfigLock(pm.paths, func() error {
+		var err error
+		profiles, err = pm.listUnlocked()
+		return err
+	})
+	return profiles, err
+}
+
+func (pm *ProfileManager) listUnlocked() ([]string, error) {
 	pdir := pm.paths.UserProfilesDir()
 
 	if !util.DirExists(pdir) {
@@ -164,87 +195,184 @@ func (pm *ProfileManager) List() ([]string, error) {
 
 // Set sets the active profile and applies the runtime config overlay
 func (pm *ProfileManager) Set(profile string) error {
-	if profile == "" {
-		return fmt.Errorf("profile name required")
-	}
+	return withConfigLock(pm.paths, func() error {
+		if profile == "" {
+			return fmt.Errorf("profile name required")
+		}
+		profilePath := filepath.Join(pm.paths.UserProfilesDir(), profile)
+		if !util.DirExists(profilePath) {
+			return fmt.Errorf("unknown profile '%s' (expected: %s)", profile, profilePath)
+		}
+		if err := util.MkdirAll(pm.paths.ConfRootDir()); err != nil {
+			return err
+		}
 
-	pdir := pm.paths.UserProfilesDir()
-	profilePath := filepath.Join(pdir, profile)
-	if !util.DirExists(profilePath) {
-		return fmt.Errorf("unknown profile '%s' (expected: %s)", profile, profilePath)
-	}
+		transactionID := newTransactionID()
+		overlayEntry, err := pm.stageOverlay(profilePath, profile, transactionID)
+		if err != nil {
+			return err
+		}
+		markerEntry := newStagedReplacement(pm.paths.ActiveProfileFile(), "active-profile", transactionID)
+		if err := util.WriteFile(markerEntry.Stage, []byte(profile), util.PublicFileMode); err != nil {
+			_ = os.RemoveAll(overlayEntry.Stage)
+			_ = os.Remove(markerEntry.Stage)
+			return fmt.Errorf("failed to stage active profile: %w", err)
+		}
+		if err := pm.paths.runConfigHook("active-profile.write"); err != nil {
+			_ = os.RemoveAll(overlayEntry.Stage)
+			_ = os.Remove(markerEntry.Stage)
+			return err
+		}
 
-	// Ensure conf root exists
-	if err := util.MkdirAll(pm.paths.ConfRootDir()); err != nil {
-		return err
-	}
-
-	// Write active profile marker
-	if err := pm.paths.SetActiveProfile(profile); err != nil {
-		return err
-	}
-
-	util.Log("Active profile set: %s", profile)
-
-	// Apply the overlay
-	return pm.Apply(profile)
+		// The overlay is deliberately first; the marker changes only after a
+		// complete replacement is ready, and rollback restores both on error.
+		if err := publishStaged(pm.paths, transactionID, []stagedReplacement{overlayEntry, markerEntry}); err != nil {
+			return err
+		}
+		util.Log("Active profile set: %s", profile)
+		return nil
+	})
 }
 
 // Apply applies the runtime config overlay for a profile
 func (pm *ProfileManager) Apply(profile string) error {
-	// If profile is empty, use active profile
-	if profile == "" {
+	return withConfigLock(pm.paths, func() error {
+		if profile == "" {
+			var err error
+			profile, err = pm.paths.activeProfileUnlocked()
+			if err != nil {
+				return err
+			}
+		}
+		return pm.applyUnlocked(profile)
+	})
+}
+
+// ApplyActive applies and returns the active profile under one lock, avoiding a
+// marker/overlay race in environment computation.
+func (pm *ProfileManager) ApplyActive() (string, error) {
+	var profile string
+	err := withConfigLock(pm.paths, func() error {
 		var err error
-		profile, err = pm.paths.ActiveProfile()
+		profile, err = pm.paths.activeProfileUnlocked()
 		if err != nil {
 			return err
 		}
-	}
+		return pm.applyUnlocked(profile)
+	})
+	return profile, err
+}
 
-	dstRoot := pm.paths.CurrentConfDir()
+func (pm *ProfileManager) applyUnlocked(profile string) error {
 	srcRoot := filepath.Join(pm.paths.UserProfilesDir(), profile)
-
-	// Check if profile exists in user's profiles directory
 	if !util.DirExists(srcRoot) {
 		return fmt.Errorf("profile '%s' not found in %s (run: local-data init)", profile, pm.paths.UserProfilesDir())
 	}
-
 	util.Log("Applying runtime config overlay for profile '%s'", profile)
-	util.Log("  to: %s", dstRoot)
+	util.Log("  to: %s", pm.paths.CurrentConfDir())
+	transactionID := newTransactionID()
+	entry, err := pm.stageOverlay(srcRoot, profile, transactionID)
+	if err != nil {
+		return err
+	}
+	return publishStaged(pm.paths, transactionID, []stagedReplacement{entry})
+}
 
-	// Remove existing overlay to ensure clean state
-	if util.DirExists(dstRoot) {
-		if err := os.RemoveAll(dstRoot); err != nil {
-			return fmt.Errorf("failed to remove existing overlay: %w", err)
-		}
+func (pm *ProfileManager) stageOverlay(srcRoot, profile, transactionID string) (stagedReplacement, error) {
+	if !util.DirExists(srcRoot) {
+		return stagedReplacement{}, fmt.Errorf("profile '%s' not found at %s", profile, srcRoot)
+	}
+	entry := newStagedReplacement(pm.paths.CurrentConfDir(), "current-overlay", transactionID)
+	if err := util.MkdirAll(filepath.Dir(entry.Target)); err != nil {
+		return stagedReplacement{}, err
+	}
+	if err := util.CopyDir(srcRoot, entry.Stage); err != nil {
+		_ = os.RemoveAll(entry.Stage)
+		return stagedReplacement{}, fmt.Errorf("failed to stage profile configs: %w", err)
+	}
+	if err := pm.paths.runConfigHook("overlay.copy"); err != nil {
+		_ = os.RemoveAll(entry.Stage)
+		return stagedReplacement{}, err
 	}
 
-	// Copy profile configs from user's profile directory to current overlay
-	// This preserves customizations made during 'profile init'
-	if err := util.CopyDir(srcRoot, dstRoot); err != nil {
-		return fmt.Errorf("failed to copy profile configs: %w", err)
-	}
-
-	// Copy hive-site.xml into Spark conf so PySpark/spark-submit find the metastore
-	hiveConfig := filepath.Join(dstRoot, "hive", "hive-site.xml")
+	hiveConfig := filepath.Join(entry.Stage, "hive", "hive-site.xml")
 	if util.FileExists(hiveConfig) {
-		sparkHiveConfig := filepath.Join(dstRoot, "spark", "hive-site.xml")
+		sparkHiveConfig := filepath.Join(entry.Stage, "spark", "hive-site.xml")
 		if err := util.CopyFile(hiveConfig, sparkHiveConfig); err != nil {
-			util.Warn("Failed to copy hive-site.xml to Spark conf: %v", err)
+			_ = os.RemoveAll(entry.Stage)
+			return stagedReplacement{}, fmt.Errorf("failed to stage Hive config for Spark: %w", err)
+		}
+		if err := pm.paths.runConfigHook("overlay.spark-copy"); err != nil {
+			_ = os.RemoveAll(entry.Stage)
+			return stagedReplacement{}, err
 		}
 	}
-
-	// Write marker file
-	markerPath := filepath.Join(dstRoot, ".profile")
-	if err := os.WriteFile(markerPath, []byte(profile), 0644); err != nil {
-		return fmt.Errorf("failed to write profile marker: %w", err)
+	if err := util.WriteFile(filepath.Join(entry.Stage, ".profile"), []byte(profile), util.PublicFileMode); err != nil {
+		_ = os.RemoveAll(entry.Stage)
+		return stagedReplacement{}, fmt.Errorf("failed to stage profile marker: %w", err)
 	}
+	if err := pm.paths.runConfigHook("overlay.marker-write"); err != nil {
+		_ = os.RemoveAll(entry.Stage)
+		return stagedReplacement{}, err
+	}
+	if err := checkOverlayPath(entry.Stage); err != nil {
+		_ = os.RemoveAll(entry.Stage)
+		return stagedReplacement{}, err
+	}
+	return entry, nil
+}
 
+func applySettingsUnder(root string, settings *Settings) error {
+	dbType, err := metastore.NormalizeDBType(settings.DBType)
+	if err != nil {
+		return err
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "*", "hive", "hive-site.xml"))
+	if err != nil {
+		return err
+	}
+	for _, path := range matches {
+		cfg, err := util.ParseHadoopXML(path)
+		if err != nil {
+			return err
+		}
+		cfg.SetProperty("javax.jdo.option.ConnectionDriverName", metastore.DriverClass(dbType))
+		cfg.SetProperty("javax.jdo.option.ConnectionURL", settings.DBURL)
+		cfg.SetProperty("javax.jdo.option.ConnectionUserName", metastore.ConnectionUser(dbType, settings.User))
+		cfg.SetProperty("javax.jdo.option.ConnectionPassword", settings.DBPassword)
+		if err := cfg.WriteXML(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkOverlayPath(cur string) error {
+	if !util.DirExists(cur) {
+		return fmt.Errorf("runtime conf overlay not found: %s", cur)
+	}
+	hadoopConf := filepath.Join(cur, "hadoop")
+	if util.DirExists(hadoopConf) {
+		for _, name := range []string{"core-site.xml", "hdfs-site.xml", "mapred-site.xml", "yarn-site.xml"} {
+			if !util.FileExists(filepath.Join(hadoopConf, name)) {
+				return fmt.Errorf("missing runtime Hadoop config: %s", filepath.Join(hadoopConf, name))
+			}
+		}
+	}
+	if !util.FileExists(filepath.Join(cur, "hive", "hive-site.xml")) {
+		return fmt.Errorf("missing runtime Hive config: %s", filepath.Join(cur, "hive", "hive-site.xml"))
+	}
 	return nil
 }
 
 // Check verifies that the runtime config overlay exists and is valid
 func (pm *ProfileManager) Check() error {
+	return withConfigLock(pm.paths, func() error {
+		return pm.checkUnlocked()
+	})
+}
+
+func (pm *ProfileManager) checkUnlocked() error {
 	cur := pm.paths.CurrentConfDir()
 
 	if !util.DirExists(cur) {

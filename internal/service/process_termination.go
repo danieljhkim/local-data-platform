@@ -11,6 +11,11 @@ import (
 // ProcessAliveChecker reports whether a PID still appears to be running.
 type ProcessAliveChecker func(pid int) bool
 
+// ProcessStateChecker reports whether a PID is running, or why its state could
+// not be determined. Stop paths use this form so an inspection failure cannot
+// be mistaken for a confirmed exit.
+type ProcessStateChecker func(pid int) (bool, error)
+
 // ProcessSignaler sends a signal to a PID.
 type ProcessSignaler func(pid int, signal syscall.Signal) error
 
@@ -20,7 +25,10 @@ type TerminateOptions struct {
 	Timeout      time.Duration
 	PollInterval time.Duration
 	IsRunning    ProcessAliveChecker
+	CheckRunning ProcessStateChecker
 	Signal       ProcessSignaler
+	Now          func() time.Time
+	Sleep        func(time.Duration)
 }
 
 // TerminatePID sends SIGTERM, waits up to timeout, then escalates to SIGKILL
@@ -38,11 +46,17 @@ func TerminatePIDWithOptions(pid int, options TerminateOptions) error {
 		return nil
 	}
 
-	if options.IsRunning == nil {
-		options.IsRunning = isProcessRunning
+	if options.CheckRunning == nil && options.IsRunning == nil {
+		options.CheckRunning = inspectProcessRunning
 	}
 	if options.Signal == nil {
 		options.Signal = signalProcess
+	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+	if options.Sleep == nil {
+		options.Sleep = time.Sleep
 	}
 	if options.PollInterval <= 0 {
 		options.PollInterval = 100 * time.Millisecond
@@ -51,28 +65,87 @@ func TerminatePIDWithOptions(pid int, options TerminateOptions) error {
 		options.Timeout = 0
 	}
 
-	if !options.IsRunning(pid) {
+	running, err := processRunning(options, pid)
+	if err != nil {
+		return fmt.Errorf("failed to inspect pid %d before SIGTERM: %w", pid, err)
+	}
+	if !running {
 		return nil
 	}
 
-	if err := options.Signal(pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("failed to send SIGTERM to pid %d: %w", pid, err)
+	if err := signalAndConfirmRace(pid, syscall.SIGTERM, options); err != nil {
+		return err
 	}
-	if waitForProcessExit(pid, options) {
+	exited, err := waitForProcessExit(pid, options)
+	if err != nil {
+		return fmt.Errorf("failed to confirm pid %d exited after SIGTERM: %w", pid, err)
+	}
+	if exited {
 		return nil
 	}
 
-	if !options.IsRunning(pid) {
+	running, err = processRunning(options, pid)
+	if err != nil {
+		return fmt.Errorf("failed to inspect pid %d before SIGKILL: %w", pid, err)
+	}
+	if !running {
 		return nil
 	}
-	if err := options.Signal(pid, syscall.SIGKILL); err != nil {
-		return fmt.Errorf("failed to send SIGKILL to pid %d after SIGTERM timeout: %w", pid, err)
+	if err := signalAndConfirmRace(pid, syscall.SIGKILL, options); err != nil {
+		return fmt.Errorf("after SIGTERM timeout: %w", err)
 	}
-	if waitForProcessExit(pid, options) {
+	exited, err = waitForProcessExit(pid, options)
+	if err != nil {
+		return fmt.Errorf("failed to confirm pid %d exited after SIGKILL: %w", pid, err)
+	}
+	if exited {
 		return nil
 	}
 
 	return fmt.Errorf("pid %d still running after SIGKILL", pid)
+}
+
+func processRunning(options TerminateOptions, pid int) (bool, error) {
+	if options.CheckRunning != nil {
+		return options.CheckRunning(pid)
+	}
+	if options.IsRunning != nil {
+		return options.IsRunning(pid), nil
+	}
+	return inspectProcessRunning(pid)
+}
+
+func signalAndConfirmRace(pid int, signal syscall.Signal, options TerminateOptions) error {
+	err := options.Signal(pid, signal)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("failed to send %s to pid %d: %w", signalName(signal), pid, err)
+	}
+
+	running, inspectErr := processRunning(options, pid)
+	if inspectErr != nil {
+		return errors.Join(
+			fmt.Errorf("failed to send %s to pid %d: %w", signalName(signal), pid, err),
+			fmt.Errorf("failed to confirm pid %d exited: %w", pid, inspectErr),
+		)
+	}
+	if running {
+		return fmt.Errorf("failed to send %s to pid %d: %w", signalName(signal), pid, err)
+	}
+	return nil
+}
+
+func signalName(signal syscall.Signal) string {
+	switch signal {
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	default:
+		return signal.String()
+	}
 }
 
 func signalProcess(pid int, signal syscall.Signal) error {
@@ -81,32 +154,29 @@ func signalProcess(pid int, signal syscall.Signal) error {
 		return err
 	}
 
-	if err := process.Signal(signal); err != nil {
-		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
-
-	return nil
+	return process.Signal(signal)
 }
 
-func waitForProcessExit(pid int, options TerminateOptions) bool {
-	deadline := time.Now().Add(options.Timeout)
+func waitForProcessExit(pid int, options TerminateOptions) (bool, error) {
+	deadline := options.Now().Add(options.Timeout)
 	for {
-		if !options.IsRunning(pid) {
-			return true
+		running, err := processRunning(options, pid)
+		if err != nil {
+			return false, err
 		}
-		if !time.Now().Before(deadline) {
-			return false
+		if !running {
+			return true, nil
+		}
+		if !options.Now().Before(deadline) {
+			return false, nil
 		}
 
 		sleepFor := options.PollInterval
-		if remaining := time.Until(deadline); remaining < sleepFor {
+		if remaining := deadline.Sub(options.Now()); remaining < sleepFor {
 			sleepFor = remaining
 		}
 		if sleepFor > 0 {
-			time.Sleep(sleepFor)
+			options.Sleep(sleepFor)
 		}
 	}
 }
