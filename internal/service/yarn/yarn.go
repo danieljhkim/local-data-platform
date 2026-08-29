@@ -59,6 +59,13 @@ func NewYARNService(paths *config.Paths) (*YARNService, error) {
 		return nil, fmt.Errorf("failed to compute environment: %w", err)
 	}
 
+	return newYARNServiceWithEnv(paths, environment)
+}
+
+// newYARNServiceWithEnv builds a YARN service manager from an already-computed
+// environment. Exposed so unit tests can inject a deterministic environment
+// without depending on Hadoop/Hive discovery being available on the host.
+func newYARNServiceWithEnv(paths *config.Paths, environment *env.Environment) (*YARNService, error) {
 	stateDir := filepath.Join(paths.StateDir(), "yarn")
 	pidDir := filepath.Join(stateDir, "pids")
 	logDir := filepath.Join(stateDir, "logs")

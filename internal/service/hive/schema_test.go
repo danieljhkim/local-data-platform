@@ -73,10 +73,7 @@ func TestHiveService_DetectMetastoreConfig(t *testing.T) {
 				BaseDir:  baseDir,
 			}
 
-			service, err := NewHiveService(paths)
-			if err != nil {
-				t.Fatalf("NewHiveService() error = %v", err)
-			}
+			service := newTestHiveService(t, paths)
 
 			// Override the hive-site.xml in the overlay location (conf/current/hive)
 			// This is what ensurePostgresJDBC actually reads
@@ -114,10 +111,7 @@ func TestHiveService_EnsureMetastoreSchema_NotPostgres(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	// Override with Derby config in the overlay location
 	derbyConfig := `<?xml version="1.0"?>
@@ -144,7 +138,7 @@ func TestHiveService_EnsureMetastoreSchema_NotPostgres(t *testing.T) {
 	}
 
 	// ensureMetastoreSchema should return nil immediately for non-Postgres metastore
-	err = service.ensureMetastoreSchema()
+	err := service.ensureMetastoreSchema()
 	if err != nil {
 		t.Errorf("ensureMetastoreSchema() should return nil for non-Postgres, got: %v", err)
 	}
@@ -164,10 +158,7 @@ func TestHiveService_EnsureMetastoreSchema_PostgresNoSchematool(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	postgresConfig := `<?xml version="1.0"?>
 <configuration>
@@ -190,7 +181,7 @@ func TestHiveService_EnsureMetastoreSchema_PostgresNoSchematool(t *testing.T) {
 
 	// ensureMetastoreSchema should not return an error when schematool fails
 	// (it logs a warning and continues)
-	err = service.ensureMetastoreSchema()
+	err := service.ensureMetastoreSchema()
 	// This may log warnings but should not error (graceful degradation)
 	if err != nil {
 		t.Logf("ensureMetastoreSchema() returned error (expected if schematool not in PATH): %v", err)

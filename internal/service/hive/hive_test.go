@@ -24,6 +24,32 @@ func setupTestProfile(tmpDir string) error {
 	return pm.Init(false, nil)
 }
 
+// fakeEnvironment returns a deterministic environment for the given paths,
+// mirroring what env.Compute would produce without depending on Hadoop/Hive
+// discovery (brew, HIVE_HOME, etc.) being available on the host running
+// the tests.
+func fakeEnvironment(paths *config.Paths) *env.Environment {
+	return &env.Environment{
+		BaseDir:     paths.BaseDir,
+		RepoRoot:    paths.RepoRoot,
+		HiveHome:    filepath.Join(paths.BaseDir, "fake-hive-home"),
+		HiveConfDir: paths.CurrentHiveConf(),
+	}
+}
+
+// newTestHiveService constructs a HiveService using a deterministic fake
+// environment, bypassing env.Compute's Hadoop/Hive/Java discovery so tests
+// remain hermetic on hosts without those installed.
+func newTestHiveService(t *testing.T, paths *config.Paths) *HiveService {
+	t.Helper()
+
+	service, err := newHiveServiceWithEnv(paths, fakeEnvironment(paths))
+	if err != nil {
+		t.Fatalf("newHiveServiceWithEnv() error = %v", err)
+	}
+	return service
+}
+
 func newTestHiveServiceWithConfig(t *testing.T, props ...util.HadoopProperty) *HiveService {
 	t.Helper()
 
@@ -138,11 +164,7 @@ func TestNewHiveService(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	if service == nil {
 		t.Fatal("NewHiveService() returned nil")
@@ -163,10 +185,7 @@ func TestNewHiveService_CreatesDirectories(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	// Verify directories were created
 	expectedDirs := []string{
@@ -201,13 +220,10 @@ func TestHiveService_Stop_NotRunning(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	// Stop when not running should not error
-	err = service.Stop()
+	err := service.Stop()
 
 	if err != nil {
 		t.Errorf("Stop() when not running should not error, got: %v", err)
@@ -228,10 +244,7 @@ func TestHiveService_Status_NotRunning(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	statuses, err := service.Status()
 
@@ -266,13 +279,10 @@ func TestHiveService_EnsurePostgresJDBC_NotNeeded(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewHiveService(paths)
-	if err != nil {
-		t.Fatalf("NewHiveService() error = %v", err)
-	}
+	service := newTestHiveService(t, paths)
 
 	// Should not error when Postgres is not configured
-	err = service.ensurePostgresJDBC()
+	err := service.ensurePostgresJDBC()
 	if err != nil {
 		t.Errorf("ensurePostgresJDBC() should not error when Postgres not configured, got: %v", err)
 	}

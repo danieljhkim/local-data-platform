@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
+	"github.com/danieljhkim/local-data-platform/internal/env"
 	"github.com/danieljhkim/local-data-platform/internal/service"
 )
 
@@ -21,6 +22,26 @@ func setupTestProfile(tmpDir string) error {
 	paths := config.NewPaths(repoRoot, baseDir)
 	pm := config.NewProfileManager(paths)
 	return pm.Init(false, nil)
+}
+
+// newTestYARNService constructs a YARNService using a deterministic fake
+// environment, bypassing env.Compute's Hadoop/Hive/Java discovery so tests
+// remain hermetic on hosts without those installed.
+func newTestYARNService(t *testing.T, paths *config.Paths) *YARNService {
+	t.Helper()
+
+	fakeEnv := &env.Environment{
+		BaseDir:       paths.BaseDir,
+		RepoRoot:      paths.RepoRoot,
+		HadoopHome:    filepath.Join(paths.BaseDir, "fake-hadoop-home"),
+		HadoopConfDir: paths.CurrentHadoopConf(),
+	}
+
+	service, err := newYARNServiceWithEnv(paths, fakeEnv)
+	if err != nil {
+		t.Fatalf("newYARNServiceWithEnv() error = %v", err)
+	}
+	return service
 }
 
 func TestNewYARNService(t *testing.T) {
@@ -37,11 +58,7 @@ func TestNewYARNService(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewYARNService(paths)
-
-	if err != nil {
-		t.Fatalf("NewYARNService() error = %v", err)
-	}
+	service := newTestYARNService(t, paths)
 
 	if service == nil {
 		t.Fatal("NewYARNService() returned nil")
@@ -62,10 +79,7 @@ func TestNewYARNService_CreatesDirectories(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewYARNService(paths)
-	if err != nil {
-		t.Fatalf("NewYARNService() error = %v", err)
-	}
+	service := newTestYARNService(t, paths)
 
 	// Verify directories were created
 	expectedDirs := []string{
@@ -99,13 +113,10 @@ func TestYARNService_Stop_NotRunning(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewYARNService(paths)
-	if err != nil {
-		t.Fatalf("NewYARNService() error = %v", err)
-	}
+	service := newTestYARNService(t, paths)
 
 	// Stop when not running should not error
-	err = service.Stop()
+	err := service.Stop()
 
 	if err != nil {
 		t.Errorf("Stop() when not running should not error, got: %v", err)
@@ -126,10 +137,7 @@ func TestYARNService_Status_NotRunning(t *testing.T) {
 		BaseDir:  baseDir,
 	}
 
-	service, err := NewYARNService(paths)
-	if err != nil {
-		t.Fatalf("NewYARNService() error = %v", err)
-	}
+	service := newTestYARNService(t, paths)
 
 	statuses, err := service.Status()
 
