@@ -15,6 +15,7 @@ This guide walks you through setting up a **local, pseudo-distributed** data eng
 
 ## Prereqs
 
+- macOS on Apple Silicon (`darwin/arm64`) or Intel (`darwin/amd64`) — both are published as native release artifacts
 - Homebrew
 - Optional: Postgres/MySQL metastore (Derby is default)
 
@@ -35,11 +36,13 @@ services during cleanup.
 
 ### Option 1: Install via Homebrew (Recommended)
 
-Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17).
+Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17). The formula picks the native binary for your Mac's architecture automatically — Apple Silicon (`darwin/arm64`) or Intel (`darwin/amd64`).
 
 ```bash
 brew install danieljhkim/tap/local-data
 ```
+
+Each GitHub release also publishes standalone `darwin_arm64` and `darwin_amd64` tarballs with per-artifact and combined (`SHA256SUMS.txt`) checksums, for installs outside of Homebrew.
 
 
 ### Option 2: Build from Source

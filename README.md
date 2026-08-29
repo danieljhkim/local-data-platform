@@ -1,6 +1,6 @@
 # local-data-platform
 
-- **macOS only** (Homebrew-first)
+- **macOS only** (Homebrew-first), supporting both Apple Silicon (`darwin/arm64`) and Intel (`darwin/amd64`) Macs
 - Go-based CLI (`local-data`)
 
 Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on cloud, and the disconnect between the cloud and my local machine.
@@ -35,11 +35,13 @@ What you get:
 
 ### Option 1: Install via Homebrew (Recommended)
 
-Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17).
+Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17). The formula selects the native binary for your Mac automatically — Apple Silicon (`darwin/arm64`) or Intel (`darwin/amd64`) — no manual architecture selection needed.
 
 ```bash
 brew install danieljhkim/tap/local-data
 ```
+
+Each GitHub release also publishes standalone `darwin_arm64` and `darwin_amd64` tarballs with per-artifact and combined (`SHA256SUMS.txt`) checksums, for anyone installing outside of Homebrew.
 
 ### Option 2: Build from Source
 
