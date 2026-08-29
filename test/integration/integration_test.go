@@ -172,11 +172,10 @@ func TestDownstreamStartupFailureStopsDispatch(t *testing.T) {
 		t.Fatalf("Hive was dispatched after the YARN failure: %#v", records)
 	}
 
-	daemonPIDs := daemonPIDs(records)
-	s.mustRun(nil, "stop")
-	for _, pid := range daemonPIDs {
+	for _, pid := range daemonPIDs(records) {
 		waitForPIDExit(t, pid, 5*time.Second)
 	}
+	assertNoPIDFiles(t, s.baseDir)
 }
 
 func TestHDFSReadinessTimeoutUsesActiveOverlay(t *testing.T) {
@@ -185,7 +184,10 @@ func TestHDFSReadinessTimeoutUsesActiveOverlay(t *testing.T) {
 	s.mustRun(nil, "profile", "set", "hdfs")
 	s.setControl("hdfs-safemode-timeout")
 
-	output := s.mustRun(nil, "start", "hdfs")
+	output, err := s.run(nil, "start", "hdfs")
+	if err == nil {
+		t.Fatalf("HDFS start unexpectedly succeeded after safe-mode timeout:\n%s", output)
+	}
 	if !strings.Contains(output, "HDFS did not exit safe mode after 10 retries") {
 		t.Fatalf("readiness timeout was not reported:\n%s", output)
 	}
@@ -203,7 +205,10 @@ func TestHDFSReadinessTimeoutUsesActiveOverlay(t *testing.T) {
 	if !foundProbe {
 		t.Fatal("safe-mode readiness probe was not executed")
 	}
-	s.mustRun(nil, "stop", "hdfs")
+	for _, pid := range daemonPIDs(s.records()) {
+		waitForPIDExit(t, pid, 5*time.Second)
+	}
+	assertNoPIDFiles(t, s.baseDir)
 }
 
 func TestStalePIDOwnershipMismatchDoesNotKillUnrelatedProcess(t *testing.T) {
@@ -548,4 +553,17 @@ func waitForPIDExit(t *testing.T, pid int, timeout time.Duration) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Errorf("pid %d still exists after %s", pid, timeout)
+}
+
+func assertNoPIDFiles(t *testing.T, baseDir string) {
+	t.Helper()
+	for _, serviceName := range []string{"hdfs", "yarn", "hive"} {
+		matches, err := filepath.Glob(filepath.Join(baseDir, "state", serviceName, "pids", "*.pid"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("stale PID files remain after rollback: %#v", matches)
+		}
+	}
 }

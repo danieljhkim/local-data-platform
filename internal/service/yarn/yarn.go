@@ -1,6 +1,7 @@
 package yarn
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,6 +45,11 @@ type YARNService struct {
 	paths   *config.Paths
 	env     *env.Environment
 	procMgr *service.ProcessManager
+
+	startResourceManagerHook func(context.Context) (bool, error)
+	startNodeManagerHook     func(context.Context) (bool, error)
+	verifyDaemonHook         func(string) error
+	stopHook                 func(string) error
 }
 
 // NewYARNService creates a new YARN service manager
@@ -76,30 +82,60 @@ func NewYARNService(paths *config.Paths) (*YARNService, error) {
 
 // Start starts the YARN ResourceManager and NodeManager
 func (y *YARNService) Start() error {
+	_, err := y.StartContext(context.Background())
+	return err
+}
+
+// StartContext starts YARN transactionally and records only newly started
+// daemons for safe top-level rollback.
+func (y *YARNService) StartContext(ctx context.Context) (service.StartResult, error) {
 	util.Log("Starting YARN services...")
+	return service.RunStartSteps(ctx, []service.StartStep{
+		{
+			Name:  "resourcemanager",
+			Start: y.startResourceManagerStep,
+			Ready: func(context.Context) error { return y.verifyDaemonStep("resourcemanager") },
+			Stop:  func() error { return y.stopStarted("resourcemanager") },
+		},
+		{
+			Name:  "nodemanager",
+			Start: y.startNodeManagerStep,
+			Ready: func(context.Context) error { return y.verifyDaemonStep("nodemanager") },
+			Stop:  func() error { return y.stopStarted("nodemanager") },
+		},
+	})
+}
 
-	// Start ResourceManager
-	if err := y.startResourceManager(); err != nil {
-		return err
+func (y *YARNService) verifyDaemonStep(name string) error {
+	if y.verifyDaemonHook != nil {
+		return y.verifyDaemonHook(name)
 	}
+	return y.verifyDaemon(name)
+}
 
-	// Start NodeManager
-	if err := y.startNodeManager(); err != nil {
-		return err
+func (y *YARNService) startResourceManagerStep(ctx context.Context) (bool, error) {
+	if y.startResourceManagerHook != nil {
+		return y.startResourceManagerHook(ctx)
 	}
+	return y.startResourceManager()
+}
 
-	return nil
+func (y *YARNService) startNodeManagerStep(ctx context.Context) (bool, error) {
+	if y.startNodeManagerHook != nil {
+		return y.startNodeManagerHook(ctx)
+	}
+	return y.startNodeManager()
 }
 
 // startResourceManager starts the YARN ResourceManager
-func (y *YARNService) startResourceManager() error {
+func (y *YARNService) startResourceManager() (bool, error) {
 	name := "resourcemanager"
 
 	// Check if already running
 	pid, err := y.procMgr.Status(name)
 	if err == nil && pid > 0 {
 		util.Log("YARN ResourceManager already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Try to find via jps
@@ -110,7 +146,7 @@ func (y *YARNService) startResourceManager() error {
 			util.Warn("Failed to update ResourceManager PID file: %v", err)
 		}
 		util.Log("YARN ResourceManager already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start the ResourceManager
@@ -120,22 +156,22 @@ func (y *YARNService) startResourceManager() error {
 	logFile := name + ".log"
 	startedPid, err := y.procMgr.Start(name, cmd, logFile)
 	if err != nil {
-		return fmt.Errorf("failed to start ResourceManager: %w", err)
+		return false, fmt.Errorf("failed to start ResourceManager: %w", err)
 	}
 
 	util.Success("YARN ResourceManager started (pid %d).", startedPid)
-	return nil
+	return true, nil
 }
 
 // startNodeManager starts the YARN NodeManager
-func (y *YARNService) startNodeManager() error {
+func (y *YARNService) startNodeManager() (bool, error) {
 	name := "nodemanager"
 
 	// Check if already running
 	pid, err := y.procMgr.Status(name)
 	if err == nil && pid > 0 {
 		util.Log("YARN NodeManager already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Try to find via jps
@@ -146,7 +182,7 @@ func (y *YARNService) startNodeManager() error {
 			util.Warn("Failed to update NodeManager PID file: %v", err)
 		}
 		util.Log("YARN NodeManager already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start the NodeManager
@@ -156,11 +192,39 @@ func (y *YARNService) startNodeManager() error {
 	logFile := name + ".log"
 	startedPid, err := y.procMgr.Start(name, cmd, logFile)
 	if err != nil {
-		return fmt.Errorf("failed to start NodeManager: %w", err)
+		return false, fmt.Errorf("failed to start NodeManager: %w", err)
 	}
 
 	util.Success("YARN NodeManager started (pid %d).", startedPid)
+	return true, nil
+}
+
+func (y *YARNService) verifyDaemon(name string) error {
+	pid, err := y.procMgr.Status(name)
+	if err != nil {
+		return fmt.Errorf("could not verify YARN %s process: %w", name, err)
+	}
+	if pid == 0 {
+		return fmt.Errorf("YARN %s process is not alive (check logs: %s)", name, filepath.Join(y.procMgr.LogDir, name+".log"))
+	}
+	if y.procMgr.ValidatePID != nil {
+		if err := y.procMgr.ValidatePID(name, pid); err != nil {
+			return fmt.Errorf("YARN %s pid %d failed ownership validation: %w", name, pid, err)
+		}
+	}
 	return nil
+}
+
+func (y *YARNService) stopStarted(name string) error {
+	if y.stopHook != nil {
+		return y.stopHook(name)
+	}
+	return y.procMgr.Stop(name)
+}
+
+// Rollback stops only daemons recorded as newly started by StartContext.
+func (y *YARNService) Rollback(result service.StartResult) error {
+	return service.RollbackStarted(result, y.stopStarted)
 }
 
 // Stop stops the YARN ResourceManager and NodeManager

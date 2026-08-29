@@ -1,6 +1,7 @@
 package hive
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -21,6 +22,15 @@ type HiveService struct {
 	paths   *config.Paths
 	env     *env.Environment
 	procMgr *service.ProcessManager
+
+	startMetastoreHook   func(context.Context) (bool, error)
+	startHiveServer2Hook func(context.Context) (bool, error)
+	waitMetastoreHook    func(context.Context) error
+	waitHiveServer2Hook  func(context.Context) error
+	verifyDaemonHook     func(string, string) error
+	listenerProbeHook    func(context.Context, string) error
+	listenerRetries      int
+	stopHook             func(string) error
 }
 
 // NewHiveService creates a new Hive service manager
@@ -54,6 +64,14 @@ func NewHiveService(paths *config.Paths) (*HiveService, error) {
 
 // Start starts the Hive Metastore and HiveServer2
 func (h *HiveService) Start() error {
+	_, err := h.StartContext(context.Background())
+	return err
+}
+
+// StartContext starts Hive transactionally. The metastore listener must be
+// ready before HiveServer2 is dispatched, and both listeners are required for
+// success.
+func (h *HiveService) StartContext(ctx context.Context) (service.StartResult, error) {
 	util.Log("Starting Hive services...")
 
 	// Clean up stale Derby lock files if using embedded Derby
@@ -61,30 +79,60 @@ func (h *HiveService) Start() error {
 
 	// Ensure required JDBC drivers are available.
 	if err := h.ensurePostgresJDBC(); err != nil {
-		return err
+		return service.StartResult{}, err
 	}
 
 	// Ensure metastore schema is initialized
 	if err := h.ensureMetastoreSchema(); err != nil {
-		return err
+		return service.StartResult{}, err
 	}
 
-	// Start Metastore
-	if err := h.startMetastore(); err != nil {
-		return err
-	}
+	return h.startComponents(ctx)
+}
 
-	// Start HiveServer2
-	if err := h.startHiveServer2(); err != nil {
-		return err
-	}
+func (h *HiveService) startComponents(ctx context.Context) (service.StartResult, error) {
+	return service.RunStartSteps(ctx, []service.StartStep{
+		{
+			Name:  "metastore",
+			Start: h.startMetastoreStep,
+			Ready: h.waitForMetastoreStep,
+			Stop:  func() error { return h.stopStarted("metastore") },
+		},
+		{
+			Name:  "hiveserver2",
+			Start: h.startHiveServer2Step,
+			Ready: h.waitForHiveServer2Step,
+			Stop:  func() error { return h.stopStarted("hiveserver2") },
+		},
+	})
+}
 
-	// Wait for HiveServer2 to be ready for connections
-	if err := h.waitForHiveServer2(); err != nil {
-		util.Warn("HiveServer2 may not be ready yet: %v", err)
+func (h *HiveService) startMetastoreStep(ctx context.Context) (bool, error) {
+	if h.startMetastoreHook != nil {
+		return h.startMetastoreHook(ctx)
 	}
+	return h.startMetastore()
+}
 
-	return nil
+func (h *HiveService) startHiveServer2Step(ctx context.Context) (bool, error) {
+	if h.startHiveServer2Hook != nil {
+		return h.startHiveServer2Hook(ctx)
+	}
+	return h.startHiveServer2()
+}
+
+func (h *HiveService) waitForMetastoreStep(ctx context.Context) error {
+	if h.waitMetastoreHook != nil {
+		return h.waitMetastoreHook(ctx)
+	}
+	return h.waitForListener(ctx, "Hive metastore", "metastore", h.listenerPorts().Metastore)
+}
+
+func (h *HiveService) waitForHiveServer2Step(ctx context.Context) error {
+	if h.waitHiveServer2Hook != nil {
+		return h.waitHiveServer2Hook(ctx)
+	}
+	return h.waitForListener(ctx, "HiveServer2", "hiveserver2", h.listenerPorts().HiveServer2)
 }
 
 // ensurePostgresJDBC ensures Postgres JDBC driver is available if needed.
@@ -101,14 +149,14 @@ func (h *HiveService) ensurePostgresJDBC() error {
 }
 
 // startMetastore starts the Hive Metastore
-func (h *HiveService) startMetastore() error {
+func (h *HiveService) startMetastore() (bool, error) {
 	name := "metastore"
 
 	// Check if already running
 	pid, err := h.procMgr.Status(name)
 	if err == nil && pid > 0 {
 		util.Log("Hive metastore already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start the Metastore
@@ -118,22 +166,22 @@ func (h *HiveService) startMetastore() error {
 	logFile := name + ".log"
 	startedPid, err := h.procMgr.Start(name, cmd, logFile)
 	if err != nil {
-		return fmt.Errorf("failed to start Hive metastore: %w", err)
+		return false, fmt.Errorf("failed to start Hive metastore: %w", err)
 	}
 
 	util.Success("Hive metastore started (pid %d).", startedPid)
-	return nil
+	return true, nil
 }
 
 // startHiveServer2 starts the HiveServer2
-func (h *HiveService) startHiveServer2() error {
+func (h *HiveService) startHiveServer2() (bool, error) {
 	name := "hiveserver2"
 
 	// Check if already running
 	pid, err := h.procMgr.Status(name)
 	if err == nil && pid > 0 {
 		util.Log("HiveServer2 already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start HiveServer2
@@ -143,11 +191,42 @@ func (h *HiveService) startHiveServer2() error {
 	logFile := name + ".log"
 	startedPid, err := h.procMgr.Start(name, cmd, logFile)
 	if err != nil {
-		return fmt.Errorf("failed to start HiveServer2: %w", err)
+		return false, fmt.Errorf("failed to start HiveServer2: %w", err)
 	}
 
 	util.Success("HiveServer2 started (pid %d).", startedPid)
+	return true, nil
+}
+
+func (h *HiveService) verifyDaemon(name, label string) error {
+	if h.verifyDaemonHook != nil {
+		return h.verifyDaemonHook(name, label)
+	}
+	pid, err := h.procMgr.Status(name)
+	if err != nil {
+		return fmt.Errorf("could not verify %s process: %w", label, err)
+	}
+	if pid == 0 {
+		return fmt.Errorf("%s process exited before becoming ready (check logs: %s)", label, filepath.Join(h.procMgr.LogDir, name+".log"))
+	}
+	if h.procMgr.ValidatePID != nil {
+		if err := h.procMgr.ValidatePID(name, pid); err != nil {
+			return fmt.Errorf("%s pid %d failed ownership validation: %w", label, pid, err)
+		}
+	}
 	return nil
+}
+
+func (h *HiveService) stopStarted(name string) error {
+	if h.stopHook != nil {
+		return h.stopHook(name)
+	}
+	return h.procMgr.Stop(name)
+}
+
+// Rollback stops only daemons recorded as newly started by StartContext.
+func (h *HiveService) Rollback(result service.StartResult) error {
+	return service.RollbackStarted(result, h.stopStarted)
 }
 
 // Stop stops the Hive Metastore and HiveServer2
@@ -299,33 +378,58 @@ func extractDerbyDBPath(dbURL string) string {
 // waitForHiveServer2 polls the HiveServer2 thrift port until it is accepting
 // connections or a timeout is reached.
 func (h *HiveService) waitForHiveServer2() error {
-	port := h.getHS2Port()
+	return h.waitForHiveServer2Step(context.Background())
+}
+
+func (h *HiveService) waitForListener(ctx context.Context, label, processName string, port int) error {
 	addr := fmt.Sprintf("localhost:%d", port)
+	util.Log("Waiting for %s to be ready on port %d...", label, port)
 
-	util.Log("Waiting for HiveServer2 to be ready on port %d...", port)
-
-	maxRetries := 30 // 30 x 2s = 60s max
+	maxRetries := h.listenerRetries
+	if maxRetries <= 0 {
+		maxRetries = 30
+	}
 	for i := 0; i < maxRetries; i++ {
-		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
-		if err == nil {
-			if err := conn.Close(); err != nil {
-				return fmt.Errorf("failed to close HiveServer2 readiness connection: %w", err)
-			}
-			util.Success("HiveServer2 is ready.")
+		if err := h.verifyDaemon(processName, label); err != nil {
+			return err
+		}
+		if err := h.probeListener(ctx, addr); err == nil {
+			util.Success("%s is ready.", label)
 			return nil
 		}
-
-		// Verify the process is still alive
-		pid, _ := h.procMgr.Status("hiveserver2")
-		if pid == 0 {
-			return fmt.Errorf("HiveServer2 process exited before becoming ready (check logs: %s)",
-				filepath.Join(h.procMgr.LogDir, "hiveserver2.log"))
+		if i < maxRetries-1 {
+			if err := waitForContext(ctx, 2*time.Second); err != nil {
+				return err
+			}
 		}
-
-		time.Sleep(2 * time.Second)
 	}
 
-	return fmt.Errorf("HiveServer2 did not become ready within 60 seconds")
+	return fmt.Errorf("%s listener on port %d did not become ready within 60 seconds (check logs: %s)", label, port, filepath.Join(h.procMgr.LogDir, processName+".log"))
+}
+
+func (h *HiveService) probeListener(ctx context.Context, address string) error {
+	if h.listenerProbeHook != nil {
+		return h.listenerProbeHook(ctx, address)
+	}
+	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return err
+	}
+	if err := conn.Close(); err != nil {
+		return fmt.Errorf("failed to close readiness connection: %w", err)
+	}
+	return nil
+}
+
+func waitForContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // getHS2Port reads the HiveServer2 thrift port from the active hive-site.xml.
