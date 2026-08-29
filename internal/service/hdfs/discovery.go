@@ -3,6 +3,7 @@ package hdfs
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -179,22 +180,33 @@ func IsProcessRunning(pid int) bool {
 // WaitForSafeMode waits for HDFS to exit safe mode
 // Returns error if timeout is reached
 func WaitForSafeMode(maxRetries int) error {
-	return WaitForSafeModeWithEnv(maxRetries, nil)
+	return WaitForSafeModeWithContext(context.Background(), maxRetries, nil)
 }
 
 // WaitForSafeModeWithEnv waits for HDFS to exit safe mode using the supplied
 // runtime environment. Service startup passes the active overlay here so the
 // readiness probe observes the same cluster configuration as the daemons.
 func WaitForSafeModeWithEnv(maxRetries int, environment []string) error {
+	return WaitForSafeModeWithContext(context.Background(), maxRetries, environment)
+}
+
+// WaitForSafeModeWithContext is the cancellation-aware readiness probe used by
+// transactional startup.
+func WaitForSafeModeWithContext(ctx context.Context, maxRetries int, environment []string) error {
 	for i := 0; i < maxRetries; i++ {
-		cmd := exec.Command("hdfs", "dfsadmin", "-safemode", "get")
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, "hdfs", "dfsadmin", "-safemode", "get")
 		if environment != nil {
 			cmd.Env = environment
 		}
 		output, err := cmd.Output()
 		if err != nil {
 			// Command failed, HDFS might not be ready
-			time.Sleep(1 * time.Second)
+			if err := sleepContext(ctx, time.Second); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -206,9 +218,22 @@ func WaitForSafeModeWithEnv(maxRetries int, environment []string) error {
 
 		// Wait 1 second before retry
 		if i < maxRetries-1 {
-			time.Sleep(1 * time.Second)
+			if err := sleepContext(ctx, time.Second); err != nil {
+				return err
+			}
 		}
 	}
 
 	return fmt.Errorf("HDFS did not exit safe mode after %d retries", maxRetries)
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -162,6 +163,16 @@ func TestCheckConfOverlay_EmptyConfDir(t *testing.T) {
 
 	if result {
 		t.Error("CheckConfOverlay() with empty conf dir should return false")
+	}
+}
+
+func TestWaitForSafeModeWithContext_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := WaitForSafeModeWithContext(ctx, 10, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitForSafeModeWithContext() error = %v, want context.Canceled", err)
 	}
 }
 

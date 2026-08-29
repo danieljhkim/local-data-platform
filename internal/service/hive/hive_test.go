@@ -1,12 +1,17 @@
 package hive
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/env"
+	"github.com/danieljhkim/local-data-platform/internal/service"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -270,6 +275,110 @@ func TestHiveService_EnsurePostgresJDBC_NotNeeded(t *testing.T) {
 	err = service.ensurePostgresJDBC()
 	if err != nil {
 		t.Errorf("ensurePostgresJDBC() should not error when Postgres not configured, got: %v", err)
+	}
+}
+
+func TestHiveStart_MetastoreMustBeReadyBeforeHiveServer2(t *testing.T) {
+	var events []string
+	h := &HiveService{
+		startMetastoreHook: func(context.Context) (bool, error) {
+			events = append(events, "start metastore")
+			return true, nil
+		},
+		waitMetastoreHook: func(context.Context) error {
+			events = append(events, "ready metastore")
+			return nil
+		},
+		startHiveServer2Hook: func(context.Context) (bool, error) {
+			events = append(events, "start hiveserver2")
+			return true, nil
+		},
+		waitHiveServer2Hook: func(context.Context) error {
+			events = append(events, "ready hiveserver2")
+			return nil
+		},
+	}
+
+	result, err := h.startComponents(context.Background())
+	if err != nil {
+		t.Fatalf("startComponents() error = %v", err)
+	}
+	wantEvents := []string{"start metastore", "ready metastore", "start hiveserver2", "ready hiveserver2"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %#v, want %#v", events, wantEvents)
+	}
+	if want := []string{"metastore", "hiveserver2"}; !reflect.DeepEqual(result.Started, want) {
+		t.Fatalf("result.Started = %#v, want %#v", result.Started, want)
+	}
+}
+
+func TestHiveStart_FaultInjectionRollsBackOnlyNewComponents(t *testing.T) {
+	tests := []struct {
+		name              string
+		metastoreStarted  bool
+		metastoreStartErr error
+		serverStarted     bool
+		metastoreReady    error
+		serverStartErr    error
+		serverReady       error
+		wantStopped       []string
+		wantServerStart   bool
+	}{
+		{name: "metastore startup failure", metastoreStartErr: errors.New("injected metastore failure")},
+		{name: "metastore readiness timeout", metastoreStarted: true, metastoreReady: errors.New("metastore listener timeout"), wantStopped: []string{"metastore"}},
+		{name: "HiveServer2 startup failure after new metastore", metastoreStarted: true, serverStartErr: errors.New("injected HiveServer2 failure"), wantStopped: []string{"metastore"}, wantServerStart: true},
+		{name: "HiveServer2 startup failure preserves existing metastore", serverStartErr: errors.New("injected HiveServer2 failure"), wantServerStart: true},
+		{name: "HiveServer2 readiness timeout", metastoreStarted: true, serverStarted: true, serverReady: errors.New("HiveServer2 listener timeout"), wantStopped: []string{"hiveserver2", "metastore"}, wantServerStart: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stopped []string
+			serverStarted := false
+			h := &HiveService{
+				startMetastoreHook: func(context.Context) (bool, error) { return tc.metastoreStarted, tc.metastoreStartErr },
+				waitMetastoreHook:  func(context.Context) error { return tc.metastoreReady },
+				startHiveServer2Hook: func(context.Context) (bool, error) {
+					serverStarted = true
+					return tc.serverStarted, tc.serverStartErr
+				},
+				waitHiveServer2Hook: func(context.Context) error { return tc.serverReady },
+				stopHook: func(name string) error {
+					stopped = append(stopped, name)
+					return nil
+				},
+			}
+
+			_, err := h.startComponents(context.Background())
+			if err == nil {
+				t.Fatal("startComponents() unexpectedly succeeded")
+			}
+			if serverStarted != tc.wantServerStart {
+				t.Fatalf("HiveServer2 dispatched = %v, want %v", serverStarted, tc.wantServerStart)
+			}
+			if !reflect.DeepEqual(stopped, tc.wantStopped) {
+				t.Fatalf("stopped = %#v, want %#v", stopped, tc.wantStopped)
+			}
+			if !strings.Contains(err.Error(), "listener timeout") && !strings.Contains(err.Error(), "injected HiveServer2 failure") && !strings.Contains(err.Error(), "injected metastore failure") {
+				t.Fatalf("startComponents() error lacks failure context: %v", err)
+			}
+		})
+	}
+}
+
+func TestHiveWaitForListener_TimeoutIsActionable(t *testing.T) {
+	h := &HiveService{
+		procMgr:          &service.ProcessManager{LogDir: "/diagnostic/logs"},
+		listenerRetries:  1,
+		verifyDaemonHook: func(string, string) error { return nil },
+		listenerProbeHook: func(context.Context, string) error {
+			return errors.New("connection refused")
+		},
+	}
+
+	err := h.waitForListener(context.Background(), "Hive metastore", "metastore", 19083)
+	if err == nil || !strings.Contains(err.Error(), "Hive metastore listener on port 19083") || !strings.Contains(err.Error(), "/diagnostic/logs/metastore.log") {
+		t.Fatalf("waitForListener() error = %v, want port and diagnostic log context", err)
 	}
 }
 

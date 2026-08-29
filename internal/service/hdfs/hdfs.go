@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,13 @@ type HDFSService struct {
 	paths   *config.Paths
 	env     *env.Environment
 	procMgr *service.ProcessManager
+
+	startNameNodeHook func(context.Context) (bool, error)
+	startDataNodeHook func(context.Context) (bool, error)
+	waitSafeModeHook  func(context.Context, int, []string) error
+	verifyDaemonHook  func(string) error
+	createDirsHook    func([]string) error
+	stopHook          func(string) error
 }
 
 // NewHDFSService creates a new HDFS service manager
@@ -45,49 +53,93 @@ func NewHDFSService(paths *config.Paths) (*HDFSService, error) {
 // Start starts the HDFS NameNode and DataNode
 // Mirrors ld_hdfs_start
 func (h *HDFSService) Start() error {
+	_, err := h.StartContext(context.Background())
+	return err
+}
+
+// StartContext starts HDFS transactionally and returns only the daemons
+// created by this invocation.
+func (h *HDFSService) StartContext(ctx context.Context) (service.StartResult, error) {
 	// Ensure Hadoop is available
 	if h.env.HadoopHome == "" {
-		return fmt.Errorf("hadoop not found (HADOOP_HOME not set). Install with: brew install hadoop")
+		return service.StartResult{}, fmt.Errorf("hadoop not found (HADOOP_HOME not set). Install with: brew install hadoop")
 	}
 
 	// Ensure local storage directories exist
 	if err := EnsureLocalStorageDirs(h.paths.BaseDir); err != nil {
-		return err
+		return service.StartResult{}, err
 	}
 
 	// Ensure NameNode is formatted
 	if err := EnsureNameNodeFormatted(h.env.HadoopConfDir); err != nil {
-		return err
+		return service.StartResult{}, err
 	}
 
 	// Ensure log and PID directories exist
 	hdfsPaths := h.paths.HDFSPaths()
 	if err := util.MkdirAll(hdfsPaths.LogsDir, hdfsPaths.PidsDir); err != nil {
-		return err
+		return service.StartResult{}, err
 	}
 
-	// Start NameNode
-	if err := h.startNameNode(); err != nil {
-		return err
-	}
-
-	// Start DataNode
-	if err := h.startDataNode(); err != nil {
-		return err
-	}
-
-	// Wait for safe mode to exit (increase retries for fresh format)
-	util.Log("Waiting for NameNode to exit safe mode...")
-	safeModeExited := true
 	runtimeEnv := h.env.MergeWithCurrent()
-	if err := WaitForSafeModeWithEnv(10, runtimeEnv); err != nil {
-		util.Warn("%v", err)
-		util.Warn("NameNode may still be in safe mode. Check logs: %s", hdfsPaths.LogsDir)
-		safeModeExited = false
-	}
+	return h.startComponents(ctx, runtimeEnv, hdfsPaths)
+}
 
-	// Create common HDFS directories
-	// Try to create directories even if safe mode didn't exit, but warn about potential failures
+func (h *HDFSService) startComponents(ctx context.Context, runtimeEnv []string, hdfsPaths *config.ServicePaths) (service.StartResult, error) {
+	return service.RunStartSteps(ctx, []service.StartStep{
+		{
+			Name:  "namenode",
+			Start: h.startNameNodeStep,
+			Ready: func(context.Context) error { return h.verifyDaemonStep("namenode") },
+			Stop:  func() error { return h.stopStarted("namenode") },
+		},
+		{
+			Name:  "datanode",
+			Start: h.startDataNodeStep,
+			Ready: func(ctx context.Context) error {
+				if err := h.verifyDaemonStep("datanode"); err != nil {
+					return err
+				}
+				util.Log("Waiting for NameNode to exit safe mode...")
+				wait := h.waitSafeModeHook
+				if wait == nil {
+					wait = WaitForSafeModeWithContext
+				}
+				if err := wait(ctx, 10, runtimeEnv); err != nil {
+					return fmt.Errorf("%w (check logs: %s)", err, hdfsPaths.LogsDir)
+				}
+				if h.createDirsHook != nil {
+					return h.createDirsHook(runtimeEnv)
+				}
+				return h.createCommonDirectories(runtimeEnv)
+			},
+			Stop: func() error { return h.stopStarted("datanode") },
+		},
+	})
+}
+
+func (h *HDFSService) verifyDaemonStep(name string) error {
+	if h.verifyDaemonHook != nil {
+		return h.verifyDaemonHook(name)
+	}
+	return h.verifyDaemon(name)
+}
+
+func (h *HDFSService) startNameNodeStep(ctx context.Context) (bool, error) {
+	if h.startNameNodeHook != nil {
+		return h.startNameNodeHook(ctx)
+	}
+	return h.startNameNode()
+}
+
+func (h *HDFSService) startDataNodeStep(ctx context.Context) (bool, error) {
+	if h.startDataNodeHook != nil {
+		return h.startDataNodeHook(ctx)
+	}
+	return h.startDataNode()
+}
+
+func (h *HDFSService) createCommonDirectories(runtimeEnv []string) error {
 	util.Log("Creating common HDFS directories...")
 	currentUser, err := user.Current()
 	username := "hadoop"
@@ -95,19 +147,13 @@ func (h *HDFSService) Start() error {
 		username = currentUser.Username
 	}
 	if err := CreateCommonHDFSDirsWithEnv(username, runtimeEnv); err != nil {
-		util.Warn("Failed to create some HDFS directories: %v", err)
-		if !safeModeExited {
-			util.Warn("This is likely because HDFS is still in safe mode.")
-			util.Warn("Run 'local-data start hdfs' again once safe mode exits,")
-			util.Warn("or manually create directories with: local-data hdfs dfs -mkdir -p /tmp /user/$USER /user/hive/warehouse /spark-history")
-		}
+		return fmt.Errorf("failed to create common HDFS directories: %w", err)
 	}
-
 	return nil
 }
 
 // startNameNode starts the NameNode process
-func (h *HDFSService) startNameNode() error {
+func (h *HDFSService) startNameNode() (bool, error) {
 	// Check if already running
 	pid, _ := h.procMgr.Status("namenode")
 	foundByPIDFile := pid != 0
@@ -121,7 +167,7 @@ func (h *HDFSService) startNameNode() error {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS NameNode running but not using current overlay config; restarting (pid %d).", pid)
 			if err := h.stopStaleDaemon("namenode", pid, foundByPIDFile); err != nil {
-				return err
+				return false, err
 			}
 			pid = 0
 		}
@@ -136,7 +182,7 @@ func (h *HDFSService) startNameNode() error {
 			util.Warn("Failed to update NameNode PID file: %v", err)
 		}
 		util.Log("HDFS NameNode already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start NameNode
@@ -145,15 +191,15 @@ func (h *HDFSService) startNameNode() error {
 
 	pid, err := h.procMgr.Start("namenode", cmd, "namenode.log")
 	if err != nil {
-		return fmt.Errorf("failed to start NameNode: %w", err)
+		return false, fmt.Errorf("failed to start NameNode: %w", err)
 	}
 
 	util.Success("HDFS NameNode started (pid %d).", pid)
-	return nil
+	return true, nil
 }
 
 // startDataNode starts the DataNode process
-func (h *HDFSService) startDataNode() error {
+func (h *HDFSService) startDataNode() (bool, error) {
 	// Check if already running
 	pid, _ := h.procMgr.Status("datanode")
 	foundByPIDFile := pid != 0
@@ -167,7 +213,7 @@ func (h *HDFSService) startDataNode() error {
 		if !CheckConfOverlay(pid, h.env.HadoopConfDir) {
 			util.Log("HDFS DataNode running but not using current overlay config; restarting (pid %d).", pid)
 			if err := h.stopStaleDaemon("datanode", pid, foundByPIDFile); err != nil {
-				return err
+				return false, err
 			}
 			pid = 0
 		}
@@ -182,7 +228,7 @@ func (h *HDFSService) startDataNode() error {
 			util.Warn("Failed to update DataNode PID file: %v", err)
 		}
 		util.Log("HDFS DataNode already running (pid %d).", pid)
-		return nil
+		return false, nil
 	}
 
 	// Start DataNode
@@ -191,11 +237,39 @@ func (h *HDFSService) startDataNode() error {
 
 	pid, err := h.procMgr.Start("datanode", cmd, "datanode.log")
 	if err != nil {
-		return fmt.Errorf("failed to start DataNode: %w", err)
+		return false, fmt.Errorf("failed to start DataNode: %w", err)
 	}
 
 	util.Success("HDFS DataNode started (pid %d).", pid)
+	return true, nil
+}
+
+func (h *HDFSService) verifyDaemon(name string) error {
+	pid, err := h.procMgr.Status(name)
+	if err != nil {
+		return fmt.Errorf("could not verify HDFS %s process: %w", name, err)
+	}
+	if pid == 0 {
+		return fmt.Errorf("HDFS %s process is not alive (check logs: %s)", name, filepath.Join(h.procMgr.LogDir, name+".log"))
+	}
+	if h.procMgr.ValidatePID != nil {
+		if err := h.procMgr.ValidatePID(name, pid); err != nil {
+			return fmt.Errorf("HDFS %s pid %d failed ownership validation: %w", name, pid, err)
+		}
+	}
 	return nil
+}
+
+func (h *HDFSService) stopStarted(name string) error {
+	if h.stopHook != nil {
+		return h.stopHook(name)
+	}
+	return h.procMgr.Stop(name)
+}
+
+// Rollback stops only daemons recorded as newly started by StartContext.
+func (h *HDFSService) Rollback(result service.StartResult) error {
+	return service.RollbackStarted(result, h.stopStarted)
 }
 
 func (h *HDFSService) stopStaleDaemon(name string, pid int, foundByPIDFile bool) error {

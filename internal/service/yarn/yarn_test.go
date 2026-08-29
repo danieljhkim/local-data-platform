@@ -1,6 +1,8 @@
 package yarn
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -256,6 +258,62 @@ func TestIsProcessRunning_InvalidPID(t *testing.T) {
 	// Should return false for non-existent process
 	if running {
 		t.Error("isProcessRunning() should return false for invalid PID")
+	}
+}
+
+func TestYARNStart_ResourceManagerFailureDoesNotDispatchNodeManager(t *testing.T) {
+	var nodeManagerStarted bool
+	y := &YARNService{
+		startResourceManagerHook: func(context.Context) (bool, error) {
+			return false, errors.New("injected ResourceManager failure")
+		},
+		startNodeManagerHook: func(context.Context) (bool, error) {
+			nodeManagerStarted = true
+			return true, nil
+		},
+		verifyDaemonHook: func(string) error { return nil },
+	}
+
+	_, err := y.StartContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "injected ResourceManager failure") {
+		t.Fatalf("StartContext() error = %v, want ResourceManager failure", err)
+	}
+	if nodeManagerStarted {
+		t.Fatal("NodeManager was dispatched after ResourceManager failure")
+	}
+}
+
+func TestYARNStart_NodeManagerFailureRollsBackOnlyNewResourceManager(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		resourceWasStarted bool
+		wantStopped        []string
+	}{
+		{name: "new ResourceManager", resourceWasStarted: true, wantStopped: []string{"resourcemanager"}},
+		{name: "existing ResourceManager", resourceWasStarted: false, wantStopped: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stopped []string
+			y := &YARNService{
+				startResourceManagerHook: func(context.Context) (bool, error) { return tc.resourceWasStarted, nil },
+				startNodeManagerHook: func(context.Context) (bool, error) {
+					return false, errors.New("injected NodeManager failure")
+				},
+				verifyDaemonHook: func(string) error { return nil },
+				stopHook: func(name string) error {
+					stopped = append(stopped, name)
+					return nil
+				},
+			}
+
+			_, err := y.StartContext(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "injected NodeManager failure") {
+				t.Fatalf("StartContext() error = %v, want NodeManager failure", err)
+			}
+			if !reflect.DeepEqual(stopped, tc.wantStopped) {
+				t.Fatalf("stopped = %#v, want %#v", stopped, tc.wantStopped)
+			}
+		})
 	}
 }
 
