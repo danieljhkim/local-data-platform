@@ -40,6 +40,13 @@ func NewHiveService(paths *config.Paths) (*HiveService, error) {
 		return nil, fmt.Errorf("failed to compute environment: %w", err)
 	}
 
+	return newHiveServiceWithEnv(paths, environment)
+}
+
+// newHiveServiceWithEnv builds a Hive service manager from an already-computed
+// environment. Exposed so unit tests can inject a deterministic environment
+// without depending on Hadoop/Hive discovery being available on the host.
+func newHiveServiceWithEnv(paths *config.Paths, environment *env.Environment) (*HiveService, error) {
 	stateDir := filepath.Join(paths.StateDir(), "hive")
 	pidDir := filepath.Join(stateDir, "pids")
 	logDir := filepath.Join(stateDir, "logs")
