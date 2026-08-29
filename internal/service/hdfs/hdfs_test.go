@@ -13,8 +13,8 @@ import (
 func TestStartComponents_DataNodeFailureRollsBackNewNameNode(t *testing.T) {
 	var stopped []string
 	h := newTransactionalTestService(&stopped)
-	h.startNameNodeHook = func(context.Context) (bool, error) { return true, nil }
-	h.startDataNodeHook = func(context.Context) (bool, error) { return false, errors.New("injected DataNode failure") }
+	h.startNameNodeHook = func(context.Context, []string) (bool, error) { return true, nil }
+	h.startDataNodeHook = func(context.Context, []string) (bool, error) { return false, errors.New("injected DataNode failure") }
 
 	_, err := h.startComponents(context.Background(), nil, &config.ServicePaths{LogsDir: "/logs"})
 	if err == nil || !strings.Contains(err.Error(), "injected DataNode failure") {
@@ -28,8 +28,8 @@ func TestStartComponents_DataNodeFailureRollsBackNewNameNode(t *testing.T) {
 func TestStartComponents_DataNodeFailurePreservesExistingNameNode(t *testing.T) {
 	var stopped []string
 	h := newTransactionalTestService(&stopped)
-	h.startNameNodeHook = func(context.Context) (bool, error) { return false, nil }
-	h.startDataNodeHook = func(context.Context) (bool, error) { return false, errors.New("injected DataNode failure") }
+	h.startNameNodeHook = func(context.Context, []string) (bool, error) { return false, nil }
+	h.startDataNodeHook = func(context.Context, []string) (bool, error) { return false, errors.New("injected DataNode failure") }
 
 	_, err := h.startComponents(context.Background(), nil, &config.ServicePaths{LogsDir: "/logs"})
 	if err == nil {
@@ -43,8 +43,8 @@ func TestStartComponents_DataNodeFailurePreservesExistingNameNode(t *testing.T) 
 func TestStartComponents_SafeModeTimeoutFailsAndRollsBackReverseOrder(t *testing.T) {
 	var stopped []string
 	h := newTransactionalTestService(&stopped)
-	h.startNameNodeHook = func(context.Context) (bool, error) { return true, nil }
-	h.startDataNodeHook = func(context.Context) (bool, error) { return true, nil }
+	h.startNameNodeHook = func(context.Context, []string) (bool, error) { return true, nil }
+	h.startDataNodeHook = func(context.Context, []string) (bool, error) { return true, nil }
 	h.waitSafeModeHook = func(context.Context, int, []string) error {
 		return errors.New("HDFS did not exit safe mode after 10 retries")
 	}
@@ -60,8 +60,8 @@ func TestStartComponents_SafeModeTimeoutFailsAndRollsBackReverseOrder(t *testing
 
 func TestStartComponents_SuccessRecordsNewDaemons(t *testing.T) {
 	h := newTransactionalTestService(nil)
-	h.startNameNodeHook = func(context.Context) (bool, error) { return false, nil }
-	h.startDataNodeHook = func(context.Context) (bool, error) { return true, nil }
+	h.startNameNodeHook = func(context.Context, []string) (bool, error) { return false, nil }
+	h.startDataNodeHook = func(context.Context, []string) (bool, error) { return true, nil }
 
 	result, err := h.startComponents(context.Background(), nil, &config.ServicePaths{LogsDir: "/logs"})
 	if err != nil {
@@ -85,4 +85,38 @@ func newTransactionalTestService(stopped *[]string) *HDFSService {
 		}
 	}
 	return h
+}
+
+func TestStartComponents_PassesOneRuntimeEnvironmentToEveryStartupStep(t *testing.T) {
+	runtimeEnv := []string{"HADOOP_CONF_DIR=/active/overlay", "PATH=/fake/bin"}
+	var received [][]string
+	h := newTransactionalTestService(nil)
+	h.startNameNodeHook = func(_ context.Context, env []string) (bool, error) {
+		received = append(received, env)
+		return true, nil
+	}
+	h.startDataNodeHook = func(_ context.Context, env []string) (bool, error) {
+		received = append(received, env)
+		return true, nil
+	}
+	h.waitSafeModeHook = func(_ context.Context, _ int, env []string) error {
+		received = append(received, env)
+		return nil
+	}
+	h.createDirsHook = func(env []string) error {
+		received = append(received, env)
+		return nil
+	}
+
+	if _, err := h.startComponents(context.Background(), runtimeEnv, &config.ServicePaths{LogsDir: "/logs"}); err != nil {
+		t.Fatalf("startComponents() error = %v", err)
+	}
+	if len(received) != 4 {
+		t.Fatalf("startup environment recipients = %d, want 4", len(received))
+	}
+	for _, env := range received {
+		if !reflect.DeepEqual(env, runtimeEnv) {
+			t.Fatalf("startup environment = %#v, want %#v", env, runtimeEnv)
+		}
+	}
 }

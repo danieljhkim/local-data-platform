@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -193,6 +194,7 @@ func WaitForSafeModeWithEnv(maxRetries int, environment []string) error {
 // WaitForSafeModeWithContext is the cancellation-aware readiness probe used by
 // transactional startup.
 func WaitForSafeModeWithContext(ctx context.Context, maxRetries int, environment []string) error {
+	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -203,9 +205,14 @@ func WaitForSafeModeWithContext(ctx context.Context, maxRetries int, environment
 		}
 		output, err := cmd.Output()
 		if err != nil {
-			// Command failed, HDFS might not be ready
-			if err := sleepContext(ctx, time.Second); err != nil {
-				return err
+			lastErr = err
+			if i < maxRetries-1 {
+				// NameNode startup can briefly reject control commands. Retries
+				// retain the supplied environment and never fall back to ambient
+				// Hadoop configuration.
+				if err := sleepContext(ctx, time.Second); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -224,7 +231,23 @@ func WaitForSafeModeWithContext(ctx context.Context, maxRetries int, environment
 		}
 	}
 
-	return fmt.Errorf("HDFS did not exit safe mode after %d retries", maxRetries)
+	if lastErr != nil {
+		return hdfsControlCommandError("hdfs dfsadmin -safemode get", environment, lastErr)
+	}
+	return fmt.Errorf("HDFS did not exit safe mode after %d retries against %s", maxRetries, hadoopConfTarget(environment))
+}
+
+func hdfsControlCommandError(command string, environment []string, err error) error {
+	return fmt.Errorf("HDFS control command %s failed against %s: %w", command, hadoopConfTarget(environment), err)
+}
+
+func hadoopConfTarget(environment []string) string {
+	for _, entry := range environment {
+		if value, found := strings.CutPrefix(entry, "HADOOP_CONF_DIR="); found {
+			return "HADOOP_CONF_DIR=" + strconv.Quote(value)
+		}
+	}
+	return "HADOOP_CONF_DIR=" + strconv.Quote(os.Getenv("HADOOP_CONF_DIR"))
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

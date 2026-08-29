@@ -40,7 +40,7 @@ func writeValidNameNodeVersion(t *testing.T, dir, storageID, clusterID string) {
 	writeFormatTestFile(t, filepath.Join(versionDir, "VERSION"), []byte("storageType=NAME_NODE\nlayoutVersion=-63\nnamespaceID=12345\ncTime=1700000000000\nclusterID="+clusterID+"\nstorageID="+storageID+"\n"))
 }
 
-func replaceFormatFunctions(t *testing.T, find func() (int, error), format func(string) error) {
+func replaceFormatFunctions(t *testing.T, find func() (int, error), format func(string, []string) error) {
 	t.Helper()
 	originalFind := findNameNodePIDForFormat
 	originalFormat := formatNameNodeForFormat
@@ -111,6 +111,83 @@ func TestCreateCommonHDFSDirs_Structure(t *testing.T) {
 	_ = err // Ignore error in unit tests
 }
 
+func TestHDFSControlCommandsUseActiveOverlayInsteadOfAmbientConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "fake-hdfs.log")
+	fakeHDFS := filepath.Join(tmpDir, "hdfs")
+	writeFormatTestFile(t, fakeHDFS, []byte(`#!/bin/sh
+printf '%s|%s\n' "$*" "$HADOOP_CONF_DIR" >> "$FAKE_HDFS_LOG"
+if [ "$1" = "dfsadmin" ]; then
+  echo "Safe mode is OFF"
+fi
+`))
+	if err := os.Chmod(fakeHDFS, 0755); err != nil {
+		t.Fatalf("chmod fake hdfs: %v", err)
+	}
+
+	activeOverlay := filepath.Join(tmpDir, "active-overlay")
+	t.Setenv("HADOOP_CONF_DIR", filepath.Join(tmpDir, "ambient-cluster"))
+	t.Setenv("PATH", tmpDir)
+	t.Setenv("FAKE_HDFS_LOG", logPath)
+	runtimeEnv := withHadoopConfDir(os.Environ(), activeOverlay)
+
+	if err := WaitForSafeModeWithEnv(1, runtimeEnv); err != nil {
+		t.Fatalf("WaitForSafeModeWithEnv() error = %v", err)
+	}
+	if err := CreateCommonHDFSDirsWithEnv("testuser", runtimeEnv); err != nil {
+		t.Fatalf("CreateCommonHDFSDirsWithEnv() error = %v", err)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake hdfs log: %v", err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	wantCommands := []string{
+		"dfsadmin -safemode get",
+		"dfs -mkdir -p /tmp",
+		"dfs -chmod 1777 /tmp",
+		"dfs -mkdir -p /user/testuser",
+		"dfs -mkdir -p /user/hive/warehouse",
+		"dfs -chmod g+w /user/hive/warehouse",
+		"dfs -mkdir -p /spark-history",
+		"dfs -chmod 1777 /spark-history",
+	}
+	if len(got) != len(wantCommands) {
+		t.Fatalf("fake hdfs invocations = %#v, want %d", got, len(wantCommands))
+	}
+	for i, command := range wantCommands {
+		want := command + "|" + activeOverlay
+		if got[i] != want {
+			t.Errorf("fake hdfs invocation %d = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+func TestHDFSControlCommandFailureNamesCommandAndOverlay(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeHDFS := filepath.Join(tmpDir, "hdfs")
+	writeFormatTestFile(t, fakeHDFS, []byte("#!/bin/sh\nexit 23\n"))
+	if err := os.Chmod(fakeHDFS, 0755); err != nil {
+		t.Fatalf("chmod fake hdfs: %v", err)
+	}
+
+	activeOverlay := filepath.Join(tmpDir, "active-overlay")
+	t.Setenv("HADOOP_CONF_DIR", filepath.Join(tmpDir, "ambient-cluster"))
+	t.Setenv("PATH", tmpDir)
+	runtimeEnv := withHadoopConfDir(os.Environ(), activeOverlay)
+
+	err := CreateCommonHDFSDirsWithEnv("testuser", runtimeEnv)
+	if err == nil || !strings.Contains(err.Error(), "hdfs dfs -mkdir -p /tmp") || !strings.Contains(err.Error(), "HADOOP_CONF_DIR=\""+activeOverlay+"\"") {
+		t.Fatalf("CreateCommonHDFSDirsWithEnv() error = %v, want command and active overlay", err)
+	}
+
+	err = WaitForSafeModeWithEnv(1, runtimeEnv)
+	if err == nil || !strings.Contains(err.Error(), "hdfs dfsadmin -safemode get") || !strings.Contains(err.Error(), "HADOOP_CONF_DIR=\""+activeOverlay+"\"") {
+		t.Fatalf("WaitForSafeModeWithEnv() error = %v, want command and active overlay", err)
+	}
+}
+
 func TestEnsureNameNodeFormatted_MissingConfigFailsClosed(t *testing.T) {
 	tmpDir := t.TempDir()
 	confDir := filepath.Join(tmpDir, "nonexistent")
@@ -146,7 +223,7 @@ func TestEnsureNameNodeFormatted_AllConfiguredDirectoriesFormatted(t *testing.T)
 	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err != nil {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v", err)
@@ -166,7 +243,7 @@ func TestEnsureNameNodeFormatted_InconsistentFormattedDirectoriesFailClosed(t *t
 	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-two")
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err == nil || !strings.Contains(err.Error(), "identity differs") {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v, want identity mismatch error", err)
@@ -186,7 +263,7 @@ func TestEnsureNameNodeFormatted_AllEmptyDirectoriesFormatsOnceAndVerifiesAll(t 
 	mkdirFormatTestDir(t, dirOne)
 	mkdirFormatTestDir(t, dirTwo)
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error {
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error {
 		formatCalls++
 		writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 		writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
@@ -215,7 +292,7 @@ func TestEnsureNameNodeFormatted_MixedStorageFailsWithoutFormatting(t *testing.T
 				writeFormatTestFile(t, filepath.Join(dirTwo, "unrelated"), []byte("data"))
 			}
 			formatCalls := 0
-			replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+			replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
 			err := EnsureNameNodeFormatted(confDir)
 			if err == nil {
 				t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
@@ -239,7 +316,7 @@ func TestEnsureNameNodeFormatted_NonEmptyAndInvalidVersionFailClosed(t *testing.
 	mkdirFormatTestDir(t, filepath.Join(dirTwo, "current"))
 	writeFormatTestFile(t, filepath.Join(dirTwo, "current", "VERSION"), []byte("not a Hadoop VERSION file"))
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
 	if err := EnsureNameNodeFormatted(confDir); err == nil {
 		t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
 	}
@@ -256,7 +333,7 @@ func TestEnsureNameNodeFormatted_RunningNameNodePreventsFormatting(t *testing.T)
 	dirTwo := filepath.Join(tmpDir, "namenode-two")
 	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 4242, nil }, func(string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 4242, nil }, func(string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err == nil || !strings.Contains(err.Error(), "4242") || !strings.Contains(err.Error(), dirOne) || !strings.Contains(err.Error(), dirTwo) {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v, want PID and storage paths", err)
