@@ -9,21 +9,11 @@ permissions:
   contents: write  # create GitHub Releases + upload assets
 
 jobs:
-  build-release:
+  prepare:
     runs-on: macos-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      asset: ${{ steps.meta.outputs.asset }}
-      sha256: ${{ steps.sha.outputs.sha256 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: "1.26.6"
-
       - name: Compute version
         id: meta
         shell: bash
@@ -38,48 +28,112 @@ jobs:
           fi
 
           VERSION="${TAG_NAME#v}"
-          ASSET="local-data_${VERSION}_darwin_arm64.tar.gz"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
 
-      - name: Build binary (darwin/arm64)
+  build-release:
+    needs: prepare
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+          - arch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.6"
+
+      - name: Build, package, and checksum (darwin/${{ matrix.arch }})
         shell: bash
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GOARCH: ${{ matrix.arch }}
         run: |
-          GOOS=darwin GOARCH=arm64 go build \
+          set -euo pipefail
+
+          GOOS=darwin GOARCH="$GOARCH" go build \
             -ldflags "-s -w -X main.version=${VERSION}" \
             -o local-data ./cmd/local-data
 
-          ./local-data version
+          ACTUAL_VERSION="$(./local-data version)"
+          if [[ "$ACTUAL_VERSION" != "$VERSION" ]]; then
+            echo "local-data version output '$ACTUAL_VERSION' does not match release tag version '$VERSION'" >&2
+            exit 1
+          fi
 
-      - name: Package tarball
-        shell: bash
-        env:
-          ASSET: ${{ steps.meta.outputs.asset }}
-        run: |
+          ASSET="local-data_${VERSION}_darwin_${GOARCH}.tar.gz"
           tar -czf "$ASSET" local-data
           ls -lh "$ASSET"
 
-      - name: Compute sha256
-        id: sha
+          SHA="$(shasum -a 256 "$ASSET" | awk '{print $1}')"
+          echo "$SHA  $ASSET" > "${ASSET}.sha256"
+          cat "${ASSET}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-darwin-${{ matrix.arch }}
+          path: |
+            local-data_*.tar.gz
+            local-data_*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build-release]
+    runs-on: ubuntu-latest
+    outputs:
+      sha256_arm64: ${{ steps.manifest.outputs.sha256_arm64 }}
+      sha256_amd64: ${{ steps.manifest.outputs.sha256_amd64 }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-darwin-*
+          path: dist
+          merge-multiple: true
+
+      - name: Build checksum manifest
+        id: manifest
         shell: bash
         env:
-          ASSET: ${{ steps.meta.outputs.asset }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          SHA="$(shasum -a 256 "$ASSET" | awk '{print $1}')"
-          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
-          echo "SHA256=$SHA"
+          set -euo pipefail
+          cd dist
+          ls -lh
 
-      - name: Create GitHub Release + upload asset
+          ARM_ASSET="local-data_${VERSION}_darwin_arm64.tar.gz"
+          AMD_ASSET="local-data_${VERSION}_darwin_amd64.tar.gz"
+
+          for asset in "$ARM_ASSET" "$AMD_ASSET"; do
+            [[ -f "$asset" ]] || { echo "missing release artifact: $asset" >&2; exit 1; }
+            [[ -f "$asset.sha256" ]] || { echo "missing checksum file: $asset.sha256" >&2; exit 1; }
+          done
+
+          cat "$ARM_ASSET.sha256" "$AMD_ASSET.sha256" > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+
+          echo "sha256_arm64=$(awk '{print $1}' "$ARM_ASSET.sha256")" >> "$GITHUB_OUTPUT"
+          echo "sha256_amd64=$(awk '{print $1}' "$AMD_ASSET.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release + upload assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          name: v${{ steps.meta.outputs.version }}
-          files: ${{ steps.meta.outputs.asset }}
+          name: v${{ needs.prepare.outputs.version }}
+          files: |
+            dist/local-data_*.tar.gz
+            dist/local-data_*.tar.gz.sha256
+            dist/SHA256SUMS.txt
           generate_release_notes: true
 
   bump-homebrew-tap:
-    needs: build-release
+    needs: [prepare, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -91,41 +145,71 @@ jobs:
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           path: tap
 
+      # The formula in danieljhkim/homebrew-tap must define per-architecture
+      # install stanzas for this rewrite to succeed, e.g.:
+      #
+      #   on_arm do
+      #     url "https://github.com/danieljhkim/local-data-platform/releases/download/v<version>/local-data_<version>_darwin_arm64.tar.gz"
+      #     sha256 "..."
+      #   end
+      #
+      #   on_intel do
+      #     url "https://github.com/danieljhkim/local-data-platform/releases/download/v<version>/local-data_<version>_darwin_amd64.tar.gz"
+      #     sha256 "..."
+      #   end
+      #
+      # This preserves the pre-existing Apple Silicon asset name/URL shape
+      # under on_arm; only the on_intel stanza and the top-level `version`
+      # are new for this tap.
       - name: Update formula
         shell: bash
         env:
-          VERSION: ${{ needs.build-release.outputs.version }}
-          SHA: ${{ needs.build-release.outputs.sha256 }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA_ARM64: ${{ needs.publish.outputs.sha256_arm64 }}
+          SHA_AMD64: ${{ needs.publish.outputs.sha256_amd64 }}
         run: |
+          set -euo pipefail
           FORMULA="tap/Formula/local-data.rb"
 
           ruby - "$FORMULA" <<'RUBY'
           formula = ARGV.fetch(0)
           version = ENV.fetch("VERSION")
-          sha = ENV.fetch("SHA")
-          url = "https://github.com/danieljhkim/local-data-platform/releases/download/v#{version}/local-data_#{version}_darwin_arm64.tar.gz"
+          sha_arm64 = ENV.fetch("SHA_ARM64")
+          sha_amd64 = ENV.fetch("SHA_AMD64")
+          repo = "danieljhkim/local-data-platform"
+          url_arm64 = "https://github.com/#{repo}/releases/download/v#{version}/local-data_#{version}_darwin_arm64.tar.gz"
+          url_amd64 = "https://github.com/#{repo}/releases/download/v#{version}/local-data_#{version}_darwin_amd64.tar.gz"
           contents = File.read(formula)
 
-          {
-            "url" => url,
-            "sha256" => sha,
-            "version" => version,
-          }.each do |name, value|
-            replaced = contents.sub!(/^\s*#{Regexp.escape(name)}\s+\".*?\"/, "  #{name} \"#{value}\"")
-            abort("missing #{name} entry in #{formula}") unless replaced
+          def rewrite_stanza!(contents, formula, block, url, sha)
+            block_re = /(on_#{block}\s+do\b.*?\n\s*end\b)/m
+            match = contents.match(block_re)
+            abort("missing on_#{block} stanza in #{formula}") unless match
+
+            stanza = match[1].dup
+            abort("missing url entry in on_#{block} stanza of #{formula}") unless stanza.sub!(/url\s+".*?"/, "url \"#{url}\"")
+            abort("missing sha256 entry in on_#{block} stanza of #{formula}") unless stanza.sub!(/sha256\s+".*?"/, "sha256 \"#{sha}\"")
+
+            contents.sub!(match[1], stanza)
           end
+
+          rewrite_stanza!(contents, formula, "arm", url_arm64, sha_arm64)
+          rewrite_stanza!(contents, formula, "intel", url_amd64, sha_amd64)
+
+          abort("missing version entry in #{formula}") unless contents.sub!(/^\s*version\s+".*?"/, "  version \"#{version}\"")
 
           File.write(formula, contents)
           RUBY
 
           echo "Updated formula:"
-          sed -n '1,120p' "$FORMULA"
+          sed -n '1,160p' "$FORMULA"
 
       - name: Commit and push tap update
         shell: bash
         env:
-          VERSION: ${{ needs.build-release.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          set -euo pipefail
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
