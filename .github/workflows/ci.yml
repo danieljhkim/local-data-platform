@@ -33,7 +33,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gofmt -l $(git ls-files '*.go') | tee /tmp/gofmt.out
+          mapfile -t go_files < <(git ls-files '*.go')
+          gofmt -l "${go_files[@]}" | tee /tmp/gofmt.out
           test ! -s /tmp/gofmt.out
 
       - name: Vet
