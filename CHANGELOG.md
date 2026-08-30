@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-08-30
+
+### Added
+- Native macOS release archives for both Apple Silicon and Intel Macs, with published checksums.
+- An integration-test target for validating a local Hadoop, Hive, Spark, and Postgres environment.
+
+### Changed
+- Service startup now requires dependencies to become ready and rolls back services started by a failed attempt.
+- HDFS readiness and initialization commands now use the active local-data profile overlay.
+- Profile and settings updates are published atomically so commands do not observe partially applied configuration.
+- Service lifecycle reporting now verifies process startup and shutdown before declaring success.
+
+### Fixed
+- NameNode formatting now validates every configured storage directory and refuses non-empty or inconsistent storage state.
+
 ## [0.3.1] - 2026-02-14
 
 ### Changed
@@ -44,5 +59,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Profile-based configuration with hand-edited XML files
 - Wrapper commands for HDFS, Hive, YARN, and Spark
 - Service lifecycle management with PID tracking and logs
-
 
