@@ -1,0 +1,112 @@
+schemaVersion: 1
+name: release-prep
+description: Guarded workspace-local release preparation probe
+enabled: false
+schedule:
+  every_minutes: 180
+template:
+  title: Check whether the next local-data-platform release is ready to prepare
+  description: |
+    You are the release-preparation probe for local-data-platform. This is a
+    report-first, read-only gate. You may read Orbit tasks, Git history, tags,
+    and RELEASING.md. Only after an eligible gate may you create or update one
+    canonical release-preparation task. Never edit repository files or mutate
+    release state during this probe.
+
+    ## 1. Deterministic unfinished-work gate
+
+    Query every task in `backlog`, `in-progress`, and `review` through the
+    registered Orbit task surface. Sort the resulting IDs lexicographically
+    before reporting them. Exempt a task only when its tags contain the exact
+    provenance tag `auto-task:release-prep`; do not exempt `release`,
+    `release-prep`, or any other `auto-task:<name>` tag.
+
+    If any non-exempt task remains, persist the complete sorted blocking IDs in
+    this probe's execution_summary, state that release preparation is blocked,
+    and stop successfully. Do not create or update a release task, change task
+    status, write release metadata, modify files, commit, tag, push, publish,
+    or seek approval. A later scheduler slot must retry this same gate.
+
+    ## 2. Deterministic no-release gate
+
+    Find the latest reachable strict release tag with the equivalent of:
+
+        git tag --merged HEAD --list 'v*' --sort=-version:refname | head -n 1
+
+    Reject a non-`v<major>.<minor>.<patch>` result as a baseline. If no strict
+    reachable baseline exists, record that fact and stop successfully without
+    repository or release-state changes. Otherwise inspect
+    `<latest-tag>..HEAD` with the no-merge survey in RELEASING.md. If there are
+    no commits in that range, record the exact tag and "nothing to release" in
+    execution_summary, then stop successfully without creating or updating a
+    release task.
+
+    ## 3. Eligible preparation handoff
+
+    When both gates pass, record exact evidence in execution_summary: the
+    sorted task query and empty blocker result, the baseline tag, surveyed
+    no-merge commit IDs and subjects, referenced DANI task IDs, a candidate
+    SemVer bump, and every breaking-change candidate with the commit/task
+    evidence that caused it to be flagged. Apply RELEASING.md's pre-1.0 policy:
+    a candidate patch bump for non-breaking work and a candidate minor bump for
+    breaking candidates. This is not human confirmation of classification.
+
+    Locate the canonical open release-preparation task by the exact title
+    pattern `Prepare v<X.Y.Z> release` and the `release` tag. Search
+    deterministically; if more than one matching open task exists, select the
+    lexicographically smallest task ID and report the duplicate IDs. Never
+    create a second canonical task. If none exists, create exactly one backlog
+    chore titled `Prepare v<X.Y.Z> release`, tagged `release`, whose description
+    contains the candidate version and survey evidence and instructs its
+    executor to follow RELEASING.md. Its only context_files selector is
+    `file:CHANGELOG.md`: the binary version is tag-derived, so do not add
+    Cargo, npm, or nonexistent version-manifest selectors.
+
+    If the canonical task exists, update only that selected task with fresh
+    candidate/survey evidence; preserve its human approval boundary and do not
+    mark it done. Record the chosen task ID in execution_summary.
+
+    Stop after the survey and canonical-task handoff. Do not edit files,
+    commit, tag, push, publish, create a GitHub Release, update Homebrew, seek
+    task approval, or ask for or record human confirmation of breaking-change
+    classification. Those actions belong to the later human-approved release
+    task.
+
+    ## Deterministic validation scenarios
+
+    The execution_summary must identify the scenario that ran:
+
+    - With another unfinished task, report its sorted ID list and make no
+      repository or release-state changes; only exact
+      `auto-task:release-prep` instances are excluded.
+    - With no other unfinished task and no strict reachable `v*` baseline,
+      report the missing baseline and make no release changes.
+    - With no commits after the latest reachable strict `v*` tag, report that
+      tag and "nothing to release" without release changes.
+    - With an eligible range, record the survey, candidate bump, and
+      breaking-change candidates, then create or update exactly one canonical
+      `release` task.
+
+    A repeated pass must reuse the open release-prep probe through
+    `skip_if_open` and reuse the one canonical release task rather than
+    creating duplicates.
+  acceptance_criteria:
+  - The unfinished-work gate reports sorted blocking task IDs and exempts only open tasks carrying the exact auto-task:release-prep provenance tag.
+  - A blocked, no-baseline, or no-release pass changes no repository or release state and completes with evidence in execution_summary.
+  - An eligible pass records the latest reachable strict v* tag, no-merge commit survey, candidate SemVer bump, and breaking-change candidates with exact evidence.
+  - An eligible pass creates or updates exactly one canonical Prepare v<X.Y.Z> release task tagged release and reports its task ID.
+  - The canonical task points to RELEASING.md and carries only file:CHANGELOG.md as its release modification target because the binary version is tag-derived.
+  - The canonical task stops before edits, commits, tags, pushes, publication, GitHub Release creation, Homebrew updates, task approval, or human confirmation of breaking-change classification.
+  - Repeated passes do not duplicate the open probe or canonical release-preparation task.
+  task_type: chore
+  tags:
+  - release-prep
+  - no-diff-expected
+  priority: high
+  crew: luna
+  status: backlog
+dedupe: skip_if_open
+created_by: codex
+created_at: 2026-08-30T06:45:00Z
+updated_by: codex
+updated_at: 2026-08-30T06:45:00Z
