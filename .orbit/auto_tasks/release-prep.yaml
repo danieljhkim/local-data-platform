@@ -63,14 +63,11 @@ template:
     Cargo, npm, or nonexistent version-manifest selectors.
 
     If the canonical task exists, update only that selected task with fresh
-    candidate/survey evidence; preserve its human approval boundary and do not
-    mark it done. Record the chosen task ID in execution_summary.
+    candidate/survey evidence; do not mark it done. Record the chosen task ID
+    in execution_summary.
 
     Stop after the survey and canonical-task handoff. Do not edit files,
-    commit, tag, push, publish, create a GitHub Release, update Homebrew, seek
-    task approval, or ask for or record human confirmation of breaking-change
-    classification. Those actions belong to the later human-approved release
-    task.
+    commit, tag, push, publish, create a GitHub Release, update Homebrew.
 
     ## Deterministic validation scenarios
 
@@ -96,7 +93,7 @@ template:
   - An eligible pass records the latest reachable strict v* tag, no-merge commit survey, candidate SemVer bump, and breaking-change candidates with exact evidence.
   - An eligible pass creates or updates exactly one canonical Prepare v<X.Y.Z> release task tagged release and reports its task ID.
   - The canonical task points to RELEASING.md and carries only file:CHANGELOG.md as its release modification target because the binary version is tag-derived.
-  - The canonical task stops before edits, commits, tags, pushes, publication, GitHub Release creation, Homebrew updates, task approval, or human confirmation of breaking-change classification.
+  - The canonical task stops before edits, commits, tags, pushes, publication, GitHub Release creation, or Homebrew updates.
   - Repeated passes do not duplicate the open probe or canonical release-preparation task.
   task_type: chore
   tags:
