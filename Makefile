@@ -1,4 +1,4 @@
-.PHONY: help build install install-user go-install clean test test-coverage test-integration test-integration-live test-all test-coverage-all test-quick format lint vet deps version size all
+.PHONY: help build install install-user go-install clean test test-coverage test-integration test-integration-live test-all test-coverage-all test-quick verify-build-version format lint vet deps version size all
 
 # Default target
 .DEFAULT_GOAL := help
@@ -8,10 +8,9 @@ BINARY_NAME := local-data
 BUILD_DIR := bin
 GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
 # Go build flags
-LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 ##@ General
 
@@ -91,7 +90,7 @@ test-integration-live: ## Run opt-in macOS smoke tests against installed Hadoop/
 	@echo "Requires idle service ports plus Homebrew Hadoop, Hive, Spark, and Java 17"
 	LOCAL_DATA_LIVE_SMOKE=1 go test -count=1 -v -tags='integration live_smoke' -run '^TestLiveMacOSSmoke$$' ./test/integration
 
-test-all: test test-integration ## Run unit and hermetic integration tests
+test-all: test test-integration verify-build-version ## Run unit, hermetic integration, and build-version tests
 
 test-coverage-all: test-integration ## Run hermetic integration tests and unit coverage
 	@echo "Running all tests with coverage..."
@@ -102,6 +101,22 @@ test-coverage-all: test-integration ## Run hermetic integration tests and unit c
 
 test-quick: ## Run tests without verbose output (faster)
 	@go test ./internal/...
+
+verify-build-version: build ## Verify the build injects the CLI version symbol
+	@set -eu; \
+		source_symbol="$$(sed -n 's/^var \([[:alnum:]_]*\) = "dev"$$/main.\1/p' cmd/local-data/main.go)"; \
+		linker_symbol="$$(printf '%s\n' '$(LDFLAGS)' | sed -n 's/.*-X \(main\.[[:alnum:]_]*\)=.*/\1/p')"; \
+		if [ -z "$$source_symbol" ] || [ "$$linker_symbol" != "$$source_symbol" ]; then \
+			echo "ERROR: Makefile injects $$linker_symbol, but cmd/local-data/main.go declares $$source_symbol" >&2; \
+			exit 1; \
+		fi; \
+		expected_version="$$(git describe --tags --always --dirty 2>/dev/null || printf '%s' dev)"; \
+		version_output="$$(./$(BUILD_DIR)/$(BINARY_NAME) version)"; \
+		flag_output="$$(./$(BUILD_DIR)/$(BINARY_NAME) --version)"; \
+		if [ "$$version_output" != "$$expected_version" ] || [ "$$flag_output" != "$$expected_version" ]; then \
+			echo "ERROR: expected $$expected_version; version=$$version_output; --version=$$flag_output" >&2; \
+			exit 1; \
+		fi
 
 ##@ Development
 
