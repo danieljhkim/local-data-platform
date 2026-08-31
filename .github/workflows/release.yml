@@ -145,8 +145,9 @@ jobs:
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           path: tap
 
-      # The formula in danieljhkim/homebrew-tap must define per-architecture
-      # install stanzas for this rewrite to succeed, e.g.:
+      # The formula in danieljhkim/homebrew-tap must define both architecture
+      # branches for this rewrite to succeed. Homebrew formulas may express
+      # those branches with either the on_arm/on_intel DSL or a conditional:
       #
       #   on_arm do
       #     url "https://github.com/danieljhkim/local-data-platform/releases/download/v<version>/local-data_<version>_darwin_arm64.tar.gz"
@@ -158,9 +159,16 @@ jobs:
       #     sha256 "..."
       #   end
       #
-      # This preserves the pre-existing Apple Silicon asset name/URL shape
-      # under on_arm; only the on_intel stanza and the top-level `version`
-      # are new for this tap.
+      #   if Hardware::CPU.arm?
+      #     url "...darwin_arm64.tar.gz"
+      #     sha256 "..."
+      #   else
+      #     url "...darwin_amd64.tar.gz"
+      #     sha256 "..."
+      #   end
+      #
+      # The updater preserves the formula's existing architecture syntax and
+      # requires URL and checksum entries in both branches before writing.
       - name: Update formula
         shell: bash
         env:
@@ -181,16 +189,29 @@ jobs:
           url_amd64 = "https://github.com/#{repo}/releases/download/v#{version}/local-data_#{version}_darwin_amd64.tar.gz"
           contents = File.read(formula)
 
+          def rewrite_entries!(branch, formula, label, url, sha)
+            abort("missing url entry in #{label} branch of #{formula}") unless branch.sub!(/url\s+".*?"/, "url \"#{url}\"")
+            abort("missing sha256 entry in #{label} branch of #{formula}") unless branch.sub!(/sha256\s+".*?"/, "sha256 \"#{sha}\"")
+            branch
+          end
+
           def rewrite_stanza!(contents, formula, block, url, sha)
             block_re = /(on_#{block}\s+do\b.*?\n\s*end\b)/m
             match = contents.match(block_re)
-            abort("missing on_#{block} stanza in #{formula}") unless match
+            if match
+              stanza = rewrite_entries!(match[1].dup, formula, "on_#{block}", url, sha)
+              contents.sub!(match[1], stanza)
+              return
+            end
 
-            stanza = match[1].dup
-            abort("missing url entry in on_#{block} stanza of #{formula}") unless stanza.sub!(/url\s+".*?"/, "url \"#{url}\"")
-            abort("missing sha256 entry in on_#{block} stanza of #{formula}") unless stanza.sub!(/sha256\s+".*?"/, "sha256 \"#{sha}\"")
+            conditional_re = /(^[ \t]*if\s+Hardware::CPU\.arm\?\s*$\n)(.*?)(^[ \t]*else\s*$\n)(.*?)(^[ \t]*end\s*$)/m
+            conditional = contents.match(conditional_re)
+            abort("missing on_#{block} stanza in #{formula}") unless conditional
 
-            contents.sub!(match[1], stanza)
+            arm_branch = rewrite_entries!(conditional[2].dup, formula, "arm", url, sha) if block == "arm"
+            intel_branch = rewrite_entries!(conditional[4].dup, formula, "intel", url, sha) if block == "intel"
+            replacement = conditional[1] + (arm_branch || conditional[2]) + conditional[3] + (intel_branch || conditional[4]) + conditional[5]
+            contents.sub!(conditional[0], replacement)
           end
 
           rewrite_stanza!(contents, formula, "arm", url_arm64, sha_arm64)

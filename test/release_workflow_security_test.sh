@@ -143,6 +143,35 @@ grep -Fq 'sha256 "aaaa"' "$good_formula" || fail "formula rewrite did not set th
 grep -Fq 'sha256 "bbbb"' "$good_formula" || fail "formula rewrite did not set the amd64 sha256"
 grep -Fq 'version "9.9.9"' "$good_formula" || fail "formula rewrite did not set the version"
 
+conditional_formula="$work_dir/conditional.rb"
+cat > "$conditional_formula" <<'FORMULA'
+class LocalData < Formula
+  desc "Local Hadoop + Hive + Spark development environment for macOS"
+  homepage "https://github.com/danieljhkim/local-data-platform"
+  version "0.0.0"
+  license "MIT"
+
+  if Hardware::CPU.arm?
+    url "https://github.com/danieljhkim/local-data-platform/releases/download/v0.0.0/local-data_0.0.0_darwin_arm64.tar.gz"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000"
+  else
+    url "https://github.com/danieljhkim/local-data-platform/releases/download/v0.0.0/local-data_0.0.0_darwin_amd64.tar.gz"
+    sha256 "1111111111111111111111111111111111111111111111111111111111111"
+  end
+end
+FORMULA
+
+if ! run_rewrite "$conditional_formula" >/dev/null 2>"$work_dir/conditional.err"; then
+  cat "$work_dir/conditional.err" >&2
+  fail "formula rewrite failed against a conditional two-architecture formula"
+fi
+
+grep -Fq 'local-data_9.9.9_darwin_arm64.tar.gz' "$conditional_formula" || fail "formula rewrite did not set the conditional arm64 url"
+grep -Fq 'local-data_9.9.9_darwin_amd64.tar.gz' "$conditional_formula" || fail "formula rewrite did not set the conditional amd64 url"
+grep -Fq 'sha256 "aaaa"' "$conditional_formula" || fail "formula rewrite did not set the conditional arm64 sha256"
+grep -Fq 'sha256 "bbbb"' "$conditional_formula" || fail "formula rewrite did not set the conditional amd64 sha256"
+grep -Fq 'version "9.9.9"' "$conditional_formula" || fail "formula rewrite did not set the conditional version"
+
 missing_intel="$work_dir/missing_intel.rb"
 cat > "$missing_intel" <<'FORMULA'
 class LocalData < Formula
