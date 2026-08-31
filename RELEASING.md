@@ -68,9 +68,9 @@ The release workflow performs the following after accepting the tag:
 1. Builds `local-data_<version>_darwin_arm64.tar.gz` and `local-data_<version>_darwin_amd64.tar.gz`.
 2. Creates a `.sha256` file for each archive, combines them in `SHA256SUMS.txt`, and verifies that manifest before publication.
 3. Creates the GitHub Release and uploads both archives, both per-archive checksum files, and `SHA256SUMS.txt`.
-4. Checks out `danieljhkim/homebrew-tap` and rewrites the formula's `on_arm` and `on_intel` URL/checksum stanzas plus its version, then commits and pushes that tap update.
+4. Checks out `danieljhkim/homebrew-tap` and rewrites both architecture branches' URL/checksum entries plus the formula version, then commits and pushes that tap update. The updater supports Homebrew's `on_arm`/`on_intel` stanzas and its `Hardware::CPU.arm?` conditional form.
 
-Check the GitHub Actions release run, the GitHub Release assets, and the Homebrew tap commit. The workflow fails rather than partially rewriting a formula when either architecture stanza or checksum entry is missing.
+Check the GitHub Actions release run, the GitHub Release assets, and the Homebrew tap commit. The workflow fails rather than partially rewriting a formula when either architecture branch or checksum entry is missing.
 
 ## Failure and hotfix recovery
 
