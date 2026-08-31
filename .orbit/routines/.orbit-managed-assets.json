@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "assetKind": "routine",
   "assets": {
     "auto_task_scheduler": "c34488a6bfc6202c347353d6e9322a53efbf91444182aed6d117c3b43a041b9f",
@@ -7,5 +7,27 @@
     "task_pilot": "f043e1452d18b867ce62df4d03d8e680b35cd396949df1a95af398516ca76bc4",
     "task_triage": "c309765db1c1fff475f55bd1e110f44f9054ac88362935bf98971cc846277916",
     "worktree_gc": "f4f496e46b90f8d07e6bcdf44f92f1ccfac3580ba2340b57d1f03a98e39292cb"
+  },
+  "routineProvenance": {
+    "ship_sweep": {
+      "templateDigest": "416134b342e33f1b2565b88bc2e41b885a39b21c02324f0c8ed79bec74c562d1",
+      "renderedDigest": "f462a67a99ace53db5d039abf69e740c715f3aa84b4efcc4ef984fba7db43ded",
+      "binding": {
+        "name": "ship-sweep-local-data-platform",
+        "hosts": [
+          "Daniels-Mac-mini.local"
+        ]
+      }
+    },
+    "task_triage": {
+      "templateDigest": "21feb397078d47165a0e2a618e8f0dfc97cdbd02c60d0595d71b43b20abd7c5e",
+      "renderedDigest": "c309765db1c1fff475f55bd1e110f44f9054ac88362935bf98971cc846277916",
+      "binding": {
+        "name": "task-triage-local-data-platform",
+        "hosts": [
+          "Daniels-Mac-mini.local"
+        ]
+      }
+    }
   }
 }
