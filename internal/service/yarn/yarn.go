@@ -315,34 +315,6 @@ func (y *YARNService) Status() ([]service.ServiceStatus, error) {
 	return statuses, nil
 }
 
-// Logs displays YARN service logs
-func (y *YARNService) Logs() error {
-	logDir := y.procMgr.LogDir
-
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		return fmt.Errorf("no YARN logs directory found: %s (have you started YARN?)", logDir)
-	}
-
-	logFiles := []string{
-		filepath.Join(logDir, "resourcemanager.log"),
-		filepath.Join(logDir, "nodemanager.log"),
-	}
-
-	for _, logFile := range logFiles {
-		fmt.Printf("==> %s\n", logFile)
-		if _, err := os.Stat(logFile); err == nil {
-			cmd := exec.Command("tail", "-n", "120", logFile)
-			cmd.Stdout = os.Stdout
-			_ = cmd.Run()
-		} else {
-			fmt.Println("(missing)")
-		}
-		fmt.Println()
-	}
-
-	return nil
-}
-
 // findWithJPS finds a process by Java class name using jps
 func findWithJPS(className string) int {
 	cmd := exec.Command("jps", "-l")

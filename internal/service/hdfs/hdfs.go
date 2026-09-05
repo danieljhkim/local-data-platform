@@ -367,33 +367,3 @@ func (h *HDFSService) Status() ([]service.ServiceStatus, error) {
 
 	return statuses, nil
 }
-
-// Logs tails the HDFS logs
-func (h *HDFSService) Logs() error {
-	hdfsPaths := h.paths.HDFSPaths()
-
-	logFiles := []string{
-		filepath.Join(hdfsPaths.LogsDir, "namenode.log"),
-		filepath.Join(hdfsPaths.LogsDir, "datanode.log"),
-	}
-
-	// Check which logs exist
-	var existingLogs []string
-	for _, logFile := range logFiles {
-		if util.FileExists(logFile) {
-			existingLogs = append(existingLogs, logFile)
-		}
-	}
-
-	if len(existingLogs) == 0 {
-		return fmt.Errorf("no HDFS log files found in %s", hdfsPaths.LogsDir)
-	}
-
-	// Tail the logs
-	args := append([]string{"-n", "120"}, existingLogs...)
-	cmd := exec.Command("tail", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
-}
