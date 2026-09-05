@@ -296,6 +296,7 @@ func (y *YARNService) Status() ([]service.ServiceStatus, error) {
 
 		// Check PID file first
 		pid, err := y.procMgr.Status(svc.name)
+		status.ProbeError = err
 		if err == nil && pid > 0 {
 			status.Running = true
 			status.PID = pid
