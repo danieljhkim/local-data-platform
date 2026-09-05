@@ -45,8 +45,10 @@ func TestSettingList_PrintsAllConfigurableKeys(t *testing.T) {
 	if !strings.Contains(out, "- db-url: ") {
 		t.Fatalf("output missing db-url key:\n%s", out)
 	}
-	if !strings.Contains(out, "- db-password: ********") {
-		t.Fatalf("output should mask db-password:\n%s", out)
+	// Fresh Derby defaults carry no placeholder password, so there is nothing
+	// to mask; TestSettingList_RedactsPasswordBearingDBURL covers the masked case.
+	if !strings.Contains(out, "- db-password: \n") {
+		t.Fatalf("output should show an empty db-password for fresh defaults:\n%s", out)
 	}
 }
 

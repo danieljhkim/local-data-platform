@@ -66,7 +66,9 @@ func TestInit_ConfirmationAllowsEditingValues(t *testing.T) {
 	errBuf := &bytes.Buffer{}
 	cmd.SetOut(out)
 	cmd.SetErr(errBuf)
-	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://edited-host:5432/edited_db\n\n"))
+	// Switching to postgres with no password source leaves the db-password
+	// prompt empty, so it must be explicitly acknowledged as empty.
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://edited-host:5432/edited_db\nempty\n"))
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("init returned error: %v", err)
@@ -83,6 +85,9 @@ func TestInit_ConfirmationAllowsEditingValues(t *testing.T) {
 	}
 	if settings.DBURL != "jdbc:postgresql://edited-host:5432/edited_db" {
 		t.Fatalf("DBURL = %q", settings.DBURL)
+	}
+	if settings.DBPassword != "" {
+		t.Fatalf("DBPassword = %q, want empty after explicit acknowledgement", settings.DBPassword)
 	}
 }
 
@@ -204,7 +209,7 @@ func TestInit_RejectsDBTypeDBURLMismatch(t *testing.T) {
 	errBuf := &bytes.Buffer{}
 	cmd.SetOut(out)
 	cmd.SetErr(errBuf)
-	cmd.SetIn(strings.NewReader("\nmysql\njdbc:postgresql://localhost:5432/metastore\n\n"))
+	cmd.SetIn(strings.NewReader("\nmysql\njdbc:postgresql://localhost:5432/metastore\nsomepassword\n"))
 
 	err := cmd.Execute()
 	if err == nil {
@@ -215,6 +220,110 @@ func TestInit_RejectsDBTypeDBURLMismatch(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "WARNING:") {
 		t.Fatalf("expected warning in stderr:\n%s", errBuf.String())
+	}
+}
+
+func TestInit_FreshDerbyDoesNotPersistPlaceholderPassword(t *testing.T) {
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\n\n\n\n"))
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+
+	settings, err := smLoad(t, paths)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.DBPassword != "" {
+		t.Fatalf("DBPassword = %q, want empty for fresh Derby defaults", settings.DBPassword)
+	}
+
+	for _, profile := range []string{"hdfs", "local"} {
+		hiveConfig := filepath.Join(paths.UserProfilesDir(), profile, "hive", "hive-site.xml")
+		content, err := os.ReadFile(hiveConfig)
+		if err != nil {
+			t.Fatalf("read %s hive-site.xml: %v", profile, err)
+		}
+		if strings.Contains(string(content), "<value>password</value>") {
+			t.Fatalf("%s hive-site.xml ships the placeholder password:\n%s", profile, content)
+		}
+	}
+}
+
+func TestInit_PostgresRequiresPasswordOrExplicitEmptyAcknowledgement(t *testing.T) {
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		t.Fatal("bootstrap should not run when password confirmation fails")
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	// db-type=postgres, no password source anywhere, and pressing Enter at the
+	// db-password prompt must not silently continue with any default.
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://localhost:5432/metastore\n\n"))
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected error requiring an explicit password or acknowledgement")
+	}
+	if !strings.Contains(err.Error(), "password required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(paths.UserProfilesDir()); err == nil {
+		t.Fatalf("profiles should not be generated when password confirmation fails")
+	}
+}
+
+func TestInit_PostgresExplicitEmptyPasswordAcknowledgement(t *testing.T) {
+	baseDir := t.TempDir()
+	paths := config.NewPaths("", baseDir)
+
+	orig := runMetastoreBootstrap
+	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
+		return nil
+	}
+	defer func() { runMetastoreBootstrap = orig }()
+
+	cmd := newInitCmd(func() *config.Paths { return paths })
+	out := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(errBuf)
+	cmd.SetIn(strings.NewReader("\npostgres\njdbc:postgresql://localhost:5432/metastore\nempty\n"))
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init returned error: %v", err)
+	}
+
+	settings, err := smLoad(t, paths)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.DBPassword != "" {
+		t.Fatalf("DBPassword = %q, want empty after explicit acknowledgement", settings.DBPassword)
 	}
 }
 

@@ -107,7 +107,7 @@ deprecated because it places the secret in process arguments and shell history.`
 			if err != nil {
 				return err
 			}
-			opts.DBPassword, err = confirmInitPassword(cmd.OutOrStdout(), cmd.InOrStdin(), reader, opts.DBPassword)
+			opts.DBPassword, err = confirmInitPassword(cmd.OutOrStdout(), cmd.InOrStdin(), reader, opts.DBPassword, dbTypeNormalized)
 			if err != nil {
 				return err
 			}
@@ -163,21 +163,52 @@ func resolveInitPassword(errOut io.Writer, passwordFile, deprecatedFlag string) 
 	return "", nil
 }
 
-func confirmInitPassword(out io.Writer, in io.Reader, reader *bufio.Reader, current string) (string, error) {
+// emptyPasswordConfirmation is the exact phrase a user must type to
+// intentionally initialize an external (postgres/mysql) metastore with no
+// password, so an empty value can never be mistaken for a skipped prompt.
+const emptyPasswordConfirmation = "empty"
+
+func confirmInitPassword(out io.Writer, in io.Reader, reader *bufio.Reader, current string, dbType metastore.DBType) (string, error) {
 	if _, err := fmt.Fprintf(out, "confirm db-password to be: %s\n", maskedInitValue(current)); err != nil {
 		return "", err
 	}
-	if _, err := fmt.Fprint(out, "Press Enter to confirm, or type a new value: "); err != nil {
+
+	// Derby's embedded "APP" user ignores the password, so the existing
+	// keep-or-replace flow is safe even when current is empty.
+	if dbType == metastore.Derby || current != "" {
+		if _, err := fmt.Fprint(out, "Press Enter to confirm, or type a new value: "); err != nil {
+			return "", err
+		}
+		value, err := util.ReadSecretLine(reader, in, out)
+		if err != nil {
+			return "", fmt.Errorf("failed to read db-password confirmation: %w", err)
+		}
+		if value != "" {
+			return value, nil
+		}
+		return current, nil
+	}
+
+	// External database with no password supplied: never silently persist a
+	// shared/blank credential. Require the operator to either provide one now
+	// or explicitly acknowledge an intentionally empty password.
+	if _, err := fmt.Fprintf(out, "WARNING: no password supplied for %s metastore.\n", dbType); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintf(out, "Type a password, or type %q to confirm an intentionally empty password: ", emptyPasswordConfirmation); err != nil {
 		return "", err
 	}
 	value, err := util.ReadSecretLine(reader, in, out)
 	if err != nil {
 		return "", fmt.Errorf("failed to read db-password confirmation: %w", err)
 	}
+	if strings.EqualFold(value, emptyPasswordConfirmation) {
+		return "", nil
+	}
 	if value != "" {
 		return value, nil
 	}
-	return current, nil
+	return "", fmt.Errorf("%s metastore password required: supply --db-password-file, %s, or type %q to confirm an intentionally empty password", dbType, util.DBPasswordEnvVar, emptyPasswordConfirmation)
 }
 
 func confirmInitValue(out io.Writer, reader *bufio.Reader, key, current string, displayValue ...string) (string, error) {

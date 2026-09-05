@@ -56,7 +56,7 @@ func HDFSProfile() *Profile {
 				ConnectionURL:        "jdbc:derby:;databaseName=metastore_db;create=true",
 				ConnectionDriverName: "org.apache.derby.iapi.jdbc.AutoloadedDriver",
 				ConnectionUserName:   "APP",
-				ConnectionPassword:   "password",
+				ConnectionPassword:   "", // Derby's embedded "APP" user ignores this; overridden for postgres/mysql via `local-data init`.
 				MetastoreURIs:        "thrift://localhost:9083",
 				WarehouseDir:         "/user/hive/warehouse", // HDFS path
 				TransportMode:        "binary",
