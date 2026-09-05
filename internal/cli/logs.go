@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +18,27 @@ const (
 	defaultLogLines = 120
 	// maxLogLines bounds --lines to keep output and memory use predictable.
 	maxLogLines = 100000
+	// tailBlockSize is the backward-read chunk for regular files.
+	tailBlockSize = 32 * 1024
+	// maxLogLineBytes is the per-line cap for a line inside the requested
+	// suffix (same 1MiB token limit as the previous bufio.Scanner path).
+	maxLogLineBytes = 1024 * 1024
+	// maxTailTruncateRetries bounds restarts when a concurrent truncate
+	// shrinks the file mid-read.
+	maxTailTruncateRetries = 3
 )
+
+// errTailTruncated is returned after bounded retries if the file keeps
+// shrinking during a tail read.
+var errTailTruncated = errors.New("file truncated during tail read")
+
+// seekStatReader is the regular-file tail seam: counted Seek/Read
+// implementations can wrap *os.File or a fake without scanning from byte 0.
+type seekStatReader interface {
+	io.Reader
+	io.Seeker
+	Stat() (os.FileInfo, error)
+}
 
 // logFilesByService lists the on-disk log file names for each service, in
 // display order. These are fixed paths under $BASE_DIR/state/<service>/logs
@@ -215,20 +236,151 @@ func tailFile(path string, n int) (lines []string, missing bool, err error) {
 		return nil, false, nil
 	}
 
-	lines, err = tailLines(f, n)
+	if statErr == nil && info.Mode().IsRegular() {
+		lines, err = tailRegularFile(f, n)
+	} else {
+		lines, err = tailLines(f, n)
+	}
 	if err != nil {
 		return nil, false, err
 	}
 	return lines, false, nil
 }
 
+// tailRegularFile returns the last n lines of a regular file by reading
+// fixed-size blocks from the end until the suffix is identified.
+//
+// Concurrent result semantics:
+//   - Append: a size snapshot is taken at the start of each attempt. Bytes
+//     written after that snapshot are not read, so a growing file cannot
+//     cause unbounded I/O or an infinite loop.
+//   - Truncate: if the file shrinks below the snapshot while reading, the
+//     attempt is abandoned and retried with a fresh snapshot, up to
+//     maxTailTruncateRetries extra times. Persistent shrinking is reported
+//     as errTailTruncated (a per-file read error).
+//
+// Oversized-line policy: a line inside the requested suffix may be at most
+// maxLogLineBytes. Longer suffix lines fail this file. An oversized line
+// older than the suffix is never scanned once N line starts are found.
+func tailRegularFile(f seekStatReader, n int) ([]string, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	for attempt := 0; attempt <= maxTailTruncateRetries; attempt++ {
+		lines, retry, err := tailRegularFileOnce(f, n)
+		if err != nil {
+			return nil, err
+		}
+		if retry {
+			continue
+		}
+		return lines, nil
+	}
+	return nil, errTailTruncated
+}
+
+func tailRegularFileOnce(f seekStatReader, n int) (lines []string, retry bool, err error) {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	size := info.Size()
+	if size == 0 {
+		return nil, false, nil
+	}
+
+	var pieces [][]byte
+	pos := size
+	remaining := n
+	skipTrailingNL := true
+	bytesSinceNL := 0
+
+	for pos > 0 && remaining > 0 {
+		chunk := int64(tailBlockSize)
+		if chunk > pos {
+			chunk = pos
+		}
+		readAt := pos - chunk
+		if _, err := f.Seek(readAt, io.SeekStart); err != nil {
+			return nil, false, err
+		}
+		buf := make([]byte, chunk)
+		got, readErr := io.ReadFull(f, buf)
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF || int64(got) != chunk {
+			return nil, true, nil
+		}
+		if readErr != nil {
+			return nil, false, readErr
+		}
+		if cur, statErr := f.Stat(); statErr == nil && cur.Size() < size {
+			return nil, true, nil
+		}
+
+		scanFrom := len(buf) - 1
+		if skipTrailingNL {
+			skipTrailingNL = false
+			if scanFrom >= 0 && buf[scanFrom] == '\n' {
+				scanFrom--
+			}
+		}
+
+		cut := 0
+		found := false
+		for i := scanFrom; i >= 0; i-- {
+			if buf[i] == '\n' {
+				bytesSinceNL = 0
+				remaining--
+				if remaining == 0 {
+					cut = i + 1
+					found = true
+					break
+				}
+				continue
+			}
+			bytesSinceNL++
+			if bytesSinceNL > maxLogLineBytes {
+				return nil, false, fmt.Errorf("log line exceeds %d-byte limit", maxLogLineBytes)
+			}
+		}
+		if found {
+			pieces = append(pieces, buf[cut:])
+			break
+		}
+		pieces = append(pieces, buf)
+		pos = readAt
+	}
+
+	total := 0
+	for _, p := range pieces {
+		total += len(p)
+	}
+	out := make([]byte, 0, total)
+	for i := len(pieces) - 1; i >= 0; i-- {
+		out = append(out, pieces[i]...)
+	}
+	return splitTailLines(out), false, nil
+}
+
+func splitTailLines(b []byte) []string {
+	if len(b) == 0 {
+		return nil
+	}
+	if b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	if len(b) == 0 {
+		return []string{""}
+	}
+	return strings.Split(string(b), "\n")
+}
+
 // tailLines reads r line by line and returns at most the last n lines, in
 // original order, using a fixed-size ring buffer so memory use is bounded by
-// n rather than the file size. Handles empty input and a final line with no
-// trailing newline.
+// n rather than the file size. Used for non-regular files that cannot seek.
+// Handles empty input and a final line with no trailing newline.
 func tailLines(r io.Reader, n int) ([]string, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), maxLogLineBytes)
 
 	ring := make([]string, n)
 	count := 0
