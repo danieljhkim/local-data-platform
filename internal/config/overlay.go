@@ -286,40 +286,43 @@ func (pm *ProfileManager) stageOverlay(srcRoot, profile, transactionID string) (
 	if err := util.MkdirAll(filepath.Dir(entry.Target)); err != nil {
 		return stagedReplacement{}, err
 	}
-	if err := util.CopyDir(srcRoot, entry.Stage); err != nil {
-		_ = os.RemoveAll(entry.Stage)
-		return stagedReplacement{}, fmt.Errorf("failed to stage profile configs: %w", err)
-	}
-	if err := pm.paths.runConfigHook("overlay.copy"); err != nil {
-		_ = os.RemoveAll(entry.Stage)
-		return stagedReplacement{}, err
-	}
-
-	hiveConfig := filepath.Join(entry.Stage, "hive", "hive-site.xml")
-	if util.FileExists(hiveConfig) {
-		sparkHiveConfig := filepath.Join(entry.Stage, "spark", "hive-site.xml")
-		if err := util.CopyFile(hiveConfig, sparkHiveConfig); err != nil {
-			_ = os.RemoveAll(entry.Stage)
-			return stagedReplacement{}, fmt.Errorf("failed to stage Hive config for Spark: %w", err)
-		}
-		if err := pm.paths.runConfigHook("overlay.spark-copy"); err != nil {
-			_ = os.RemoveAll(entry.Stage)
-			return stagedReplacement{}, err
-		}
-	}
-	if err := util.WriteFile(filepath.Join(entry.Stage, ".profile"), []byte(profile), util.PublicFileMode); err != nil {
-		_ = os.RemoveAll(entry.Stage)
-		return stagedReplacement{}, fmt.Errorf("failed to stage profile marker: %w", err)
-	}
-	if err := pm.paths.runConfigHook("overlay.marker-write"); err != nil {
-		_ = os.RemoveAll(entry.Stage)
-		return stagedReplacement{}, err
-	}
-	if err := checkOverlayPath(entry.Stage); err != nil {
+	if err := pm.materializeOverlay(srcRoot, entry.Stage, profile); err != nil {
 		_ = os.RemoveAll(entry.Stage)
 		return stagedReplacement{}, err
 	}
 	return entry, nil
+}
+
+// materializeOverlay writes the overlay profile set would publish into destDir.
+// Callers own destDir lifetime; this function does not publish or remove it.
+func (pm *ProfileManager) materializeOverlay(srcRoot, destDir, profile string) error {
+	if !util.DirExists(srcRoot) {
+		return fmt.Errorf("profile '%s' not found at %s", profile, srcRoot)
+	}
+	if err := util.CopyDir(srcRoot, destDir); err != nil {
+		return fmt.Errorf("failed to stage profile configs: %w", err)
+	}
+	if err := pm.paths.runConfigHook("overlay.copy"); err != nil {
+		return err
+	}
+
+	hiveConfig := filepath.Join(destDir, "hive", "hive-site.xml")
+	if util.FileExists(hiveConfig) {
+		sparkHiveConfig := filepath.Join(destDir, "spark", "hive-site.xml")
+		if err := util.CopyFile(hiveConfig, sparkHiveConfig); err != nil {
+			return fmt.Errorf("failed to stage Hive config for Spark: %w", err)
+		}
+		if err := pm.paths.runConfigHook("overlay.spark-copy"); err != nil {
+			return err
+		}
+	}
+	if err := util.WriteFile(filepath.Join(destDir, ".profile"), []byte(profile), util.PublicFileMode); err != nil {
+		return fmt.Errorf("failed to stage profile marker: %w", err)
+	}
+	if err := pm.paths.runConfigHook("overlay.marker-write"); err != nil {
+		return err
+	}
+	return checkOverlayPath(destDir)
 }
 
 func applySettingsUnder(root string, settings *Settings) error {
