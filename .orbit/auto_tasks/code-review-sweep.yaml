@@ -65,12 +65,10 @@ template:
   - code-review-sweep
   - no-diff-expected
   priority: medium
-  # The portable system lane is seeded per machine and compatibility-aliased
-  # for configs written before that crew existed.
-  crew: opus
+  crew: sol
   status: backlog
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-08-23T00:00:00Z
-updated_by: system
-updated_at: 2026-08-23T00:00:00Z
+updated_by: unknown
+updated_at: 2026-09-05T03:50:45.940901+00:00
