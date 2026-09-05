@@ -16,6 +16,29 @@ fail() {
 grep -Fq 'TAG_NAME: ${{ github.ref_name }}' "$workflow" || fail "tag name is not passed through step env"
 grep -Fq '[[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$workflow" || fail "release tag allowlist is missing"
 
+# --- Token and checkout boundaries -----------------------------------------
+
+grep -Fq $'permissions:\n  contents: read' "$workflow" \
+  || fail "workflow default permission must be contents: read"
+
+build_release_block="$(awk '
+  /^  build-release:$/ { in_job = 1 }
+  in_job && /^  [[:alnum:]-]+:$/ && $0 !~ /^  build-release:$/ { exit }
+  in_job { print }
+' "$workflow")"
+publish_block="$(awk '
+  /^  publish:$/ { in_job = 1 }
+  in_job && /^  [[:alnum:]-]+:$/ && $0 !~ /^  publish:$/ { exit }
+  in_job { print }
+' "$workflow")"
+
+grep -Fq $'    permissions:\n      contents: read' <<<"$build_release_block" \
+  || fail "build-release must be explicitly limited to contents: read"
+grep -Fq $'    permissions:\n      contents: write' <<<"$publish_block" \
+  || fail "publish must explicitly grant contents: write"
+grep -Fq $'          persist-credentials: false' <<<"$build_release_block" \
+  || fail "build-release checkout must not persist credentials"
+
 if awk '
   function indent(line, prefix) {
     prefix = line
