@@ -66,6 +66,27 @@ stopped state. Collection and configuration failures appear in `errors` while
 available observations are retained, and cause a nonzero exit status. Process
 and listener observations do not establish that a dependency is ready.
 
+`env doctor --json` also writes exactly one versioned JSON object to stdout.
+Its schema is currently version `1` and contains only dependency observations:
+`target`, `dependencies.required`, `dependencies.optional`, `java`, and
+`result.healthy`. Required findings determine the command exit status and
+`result.healthy`; optional findings remain warnings. The report never includes
+environment values or credentials.
+
+```bash
+# Healthy preflight (exit 0)
+local-data env doctor --json
+# {"schema_version":1,"target":"general","dependencies":{"required":[{"command":"java","found":true},{"command":"brew","found":true}],"optional":[{"command":"curl","found":true},{"command":"spark-sql","found":true},{"command":"beeline","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":true}}
+
+# Missing required dependency (exit 1)
+local-data env doctor start hdfs --json
+# {"schema_version":1,"target":"start hdfs","dependencies":{"required":[{"command":"java","found":true},{"command":"hdfs","found":false}],"optional":[{"command":"curl","found":true},{"command":"jps","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":false}}
+
+# Missing optional dependency is still healthy (exit 0)
+local-data env doctor --json
+# {"schema_version":1,"target":"general","dependencies":{"required":[{"command":"java","found":true},{"command":"brew","found":true}],"optional":[{"command":"curl","found":true},{"command":"spark-sql","found":false},{"command":"beeline","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":true}}
+```
+
 ---
 
 ## Quick Start
