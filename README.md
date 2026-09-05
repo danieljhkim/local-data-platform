@@ -91,6 +91,9 @@ local-data init
 local-data profile set hdfs    # HDFS + YARN + Hive + Spark
 local-data profile set local   # Hive + Spark only (no HDFS/YARN)
 
+# Preview overlay changes without activating a profile
+local-data profile diff hdfs
+
 # Start all services (HDFS → YARN → Hive) or (Hive only) depending on profile
 local-data start
 
@@ -153,6 +156,7 @@ Setting precedence (highest to lowest):
 - Profiles are generated programmatically from Go structs (no hand-edited XML required)
 - `local-data init` generates profile templates under `$BASE_DIR/conf/profiles/` and bootstraps metastore schema
 - `local-data profile set <name>` materializes the runtime overlay under `$BASE_DIR/conf/current/`
+- `local-data profile diff <name>` previews the overlay `profile set` would activate without changing the active profile, runtime overlay, or settings. Password and credential values are redacted.
 - `local-data setting set <key> <value>` updates persisted settings and relevant profile/current Hive XML values
 - Every command computes and injects the environment for the active profile (hermetic execution)
 - Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`
@@ -231,7 +235,7 @@ local-data-platform/
 ├── internal/
 │   ├── cli/                 # Cobra CLI commands
 │   │   ├── env/             # env print/exec/doctor
-│   │   ├── profile/         # profile list/set/check
+│   │   ├── profile/         # profile list/set/check/diff
 │   │   ├── setting/         # setting list/set/show
 │   │   ├── service/         # start/stop/status
 │   │   ├── wrappers/        # wrapper commands (hdfs, hive, yarn, etc.)

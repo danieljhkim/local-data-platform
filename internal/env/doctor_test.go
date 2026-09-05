@@ -111,6 +111,7 @@ func TestRunDoctor_ProfileCommands(t *testing.T) {
 		"profile set",
 		"profile list",
 		"profile check",
+		"profile diff",
 		"env exec",
 		"env print",
 	}

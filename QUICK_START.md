@@ -113,6 +113,9 @@ local-data setting show hadoop   # prints Hadoop config files
 local-data profile set hdfs    # HDFS + YARN + Hive + Spark
 local-data profile set local   # Hive + Spark only (no HDFS/YARN)
 
+# Preview overlay changes without activating a profile
+local-data profile diff hdfs
+
 # List available profiles
 local-data profile list
 

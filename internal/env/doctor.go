@@ -49,7 +49,7 @@ func RunDoctor(target string) *DoctorResult {
 		required = append(required, "hive")
 		optional = append(optional, "beeline")
 
-	case "init", "profile set", "profile list", "profile check":
+	case "init", "profile set", "profile list", "profile check", "profile diff":
 		// These are handled by Go, no additional deps needed
 		// In Bash version they check for cp/sed
 
