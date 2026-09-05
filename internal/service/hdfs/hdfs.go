@@ -332,27 +332,37 @@ func (h *HDFSService) Status() ([]service.ServiceStatus, error) {
 	var statuses []service.ServiceStatus
 
 	// Check NameNode
-	nnPid, _ := h.procMgr.Status("namenode")
+	nnPid, nnErr := h.procMgr.Status("namenode")
 	if nnPid == 0 {
-		nnPid, _ = FindNameNodePID()
+		pid, err := FindNameNodePID()
+		if err != nil && nnErr == nil {
+			nnErr = err
+		}
+		nnPid = pid
 	}
 
 	statuses = append(statuses, service.ServiceStatus{
-		Name:    "namenode",
-		Running: nnPid != 0,
-		PID:     nnPid,
+		Name:       "namenode",
+		Running:    nnPid != 0,
+		PID:        nnPid,
+		ProbeError: nnErr,
 	})
 
 	// Check DataNode
-	dnPid, _ := h.procMgr.Status("datanode")
+	dnPid, dnErr := h.procMgr.Status("datanode")
 	if dnPid == 0 {
-		dnPid, _ = FindDataNodePID()
+		pid, err := FindDataNodePID()
+		if err != nil && dnErr == nil {
+			dnErr = err
+		}
+		dnPid = pid
 	}
 
 	statuses = append(statuses, service.ServiceStatus{
-		Name:    "datanode",
-		Running: dnPid != 0,
-		PID:     dnPid,
+		Name:       "datanode",
+		Running:    dnPid != 0,
+		PID:        dnPid,
+		ProbeError: dnErr,
 	})
 
 	return statuses, nil

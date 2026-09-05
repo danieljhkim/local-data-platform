@@ -2,6 +2,7 @@ package hive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -269,11 +270,12 @@ func (h *HiveService) StopForce() error {
 
 // ListenerStatus represents the status of a Hive listener port
 type ListenerStatus struct {
-	Label     string // e.g., "metastore", "hiveserver2"
-	Port      int
-	Listening bool
-	PID       string // PID of the listener process (if listening)
-	Cmd       string // Command name (if listening)
+	Label      string // e.g., "metastore", "hiveserver2"
+	Port       int
+	Listening  bool
+	PID        string // PID of the listener process (if listening)
+	Cmd        string // Command name (if listening)
+	ProbeError error  // Failed probe; false Listening without an error means stopped.
 }
 
 // Status returns the status of Hive services
@@ -285,6 +287,7 @@ func (h *HiveService) Status() ([]service.ServiceStatus, error) {
 		status := service.ServiceStatus{Name: svc}
 
 		pid, err := h.procMgr.Status(svc)
+		status.ProbeError = err
 		if err == nil && pid > 0 {
 			status.Running = true
 			status.PID = pid
@@ -300,9 +303,10 @@ func (h *HiveService) Status() ([]service.ServiceStatus, error) {
 func (h *HiveService) ListenerStatuses() []ListenerStatus {
 	ports := h.listenerPorts()
 	if _, err := exec.LookPath("lsof"); err != nil {
+		probeErr := fmt.Errorf("lsof is not available: %w", err)
 		return []ListenerStatus{
-			{Label: "metastore", Port: ports.Metastore},
-			{Label: "hiveserver2", Port: ports.HiveServer2},
+			{Label: "metastore", Port: ports.Metastore, ProbeError: probeErr},
+			{Label: "hiveserver2", Port: ports.HiveServer2, ProbeError: probeErr},
 		}
 	}
 
@@ -319,6 +323,10 @@ func (h *HiveService) checkListener(port int, label string) ListenerStatus {
 	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN")
 	output, err := cmd.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			ls.ProbeError = fmt.Errorf("lsof listener probe: %w", err)
+		}
 		return ls
 	}
 

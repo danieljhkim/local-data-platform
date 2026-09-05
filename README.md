@@ -58,6 +58,14 @@ brew install go hadoop hive jdk@17 apache-spark
 
 ```
 
+`status --json` writes one versioned JSON object to stdout. Its `schema_version`
+is currently `1`; `profile`, `services[].processes`, optional
+`services[].listeners`, and `errors` are stable machine-readable fields. A
+process with `running: false` or listener with `listening: false` is an observed
+stopped state. Collection and configuration failures appear in `errors` while
+available observations are retained, and cause a nonzero exit status. Process
+and listener observations do not establish that a dependency is ready.
+
 ---
 
 ## Quick Start
@@ -97,6 +105,9 @@ local-data spark-submit my_job.py
 
 # Check service status
 local-data status
+
+# Consume status from a script (nonzero means collection/configuration errors)
+local-data status --json | jq '.services[] | {name, processes}'
 
 # View logs
 local-data logs
