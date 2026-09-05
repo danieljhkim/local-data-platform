@@ -57,10 +57,10 @@ pg_isready
 Choose values (examples shown):
 
 - user: `daniel`
-- password: `password`
+- password: a secret you generate yourself (do not reuse this doc's examples), e.g. `openssl rand -base64 24`
 - database: `metastore`
 
-Create role + db:
+Create role + db (replace `CHANGE_ME` with your generated password before running):
 
 ```bash
 createuser --superuser "$USER" 2>/dev/null || true
@@ -69,7 +69,7 @@ psql postgres <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daniel') THEN
-    CREATE ROLE daniel WITH LOGIN PASSWORD 'password';
+    CREATE ROLE daniel WITH LOGIN PASSWORD 'CHANGE_ME';
   END IF;
 END
 $$;

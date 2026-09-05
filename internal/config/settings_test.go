@@ -50,8 +50,8 @@ func TestSettingsManager_LoadOrDefault_MissingFile(t *testing.T) {
 	if got.DBURL != wantDerbyURL {
 		t.Errorf("DBURL = %q", got.DBURL)
 	}
-	if got.DBPassword != "password" {
-		t.Errorf("DBPassword = %q", got.DBPassword)
+	if got.DBPassword != "" {
+		t.Errorf("DBPassword = %q, want empty (no placeholder password on fresh Derby defaults)", got.DBPassword)
 	}
 	if strings.TrimSpace(got.User) == "" {
 		t.Errorf("User should not be empty")

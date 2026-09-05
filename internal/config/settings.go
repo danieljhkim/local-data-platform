@@ -12,8 +12,6 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
-const defaultDBPassword = "password"
-
 // Settings holds persisted user-configurable settings.
 type Settings struct {
 	User       string `json:"user"`
@@ -179,11 +177,15 @@ func relativeConfigPath(paths *Paths, path string) string {
 func defaultSettings(baseDir string) *Settings {
 	dbType := metastore.Derby
 	return &Settings{
-		User:       runtimeUser(),
-		BaseDir:    baseDir,
-		DBType:     string(dbType),
-		DBURL:      metastore.DefaultDBURLForBase(dbType, baseDir),
-		DBPassword: defaultDBPassword,
+		User:    runtimeUser(),
+		BaseDir: baseDir,
+		DBType:  string(dbType),
+		DBURL:   metastore.DefaultDBURLForBase(dbType, baseDir),
+		// Derby's embedded "APP" user ignores this value, so an empty default
+		// is safe. Postgres/MySQL never fall back to this: cli/init.go
+		// requires an explicit password or explicit empty-password consent
+		// before persisting settings for an external database.
+		DBPassword: "",
 	}
 }
 
@@ -198,9 +200,6 @@ func (sm *SettingsManager) sanitize(settings *Settings) error {
 
 	settings.DBURL = strings.TrimSpace(settings.DBURL)
 	settings.DBPassword = strings.TrimSpace(settings.DBPassword)
-	if settings.DBPassword == "" {
-		settings.DBPassword = defaultDBPassword
-	}
 
 	rawType := strings.TrimSpace(settings.DBType)
 	if rawType == "" {
