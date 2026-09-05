@@ -112,8 +112,17 @@ local-data status
 # Consume status from a script (nonzero means collection/configuration errors)
 local-data status --json | jq '.services[] | {name, processes}'
 
-# View logs
+# View logs (selection follows the active profile, like `status`)
 local-data logs
+
+# View logs for one service only, regardless of active profile
+local-data logs hive
+
+# Control how many trailing lines are shown per log file (default 120)
+local-data logs hive --lines 50
+
+# List the selected log files without printing content
+local-data logs hive --lines 0
 
 # Stop all services (reverse order: Hive → YARN → HDFS)
 local-data stop
@@ -164,6 +173,7 @@ Setting precedence (highest to lowest):
 - `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`, `HIVE_CONF_DIR`, and `PATH` set to use the overlay
 - Services write logs to `$BASE_DIR/state/<service>/logs`
 - PID files are managed in `$BASE_DIR/state/<service>/pids`
+- `local-data logs [hdfs|yarn|hive] --lines N` selects services the same way `status` does (no argument follows the active profile: `local` shows Hive only, `hdfs` shows HDFS+YARN+Hive; an explicit service name always applies regardless of profile). `--lines` defaults to 120, accepts 0 for a metadata-only listing of the log files, and is bounded at 100000. Log files are located by fixed on-disk path, so stopped services and missing Hadoop/Hive/Spark executables don't prevent existing logs from being tailed; a missing file is reported as such, and a read failure on one file doesn't suppress output from the others.
 
 ---
 

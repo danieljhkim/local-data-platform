@@ -452,33 +452,3 @@ func waitForContext(ctx context.Context, duration time.Duration) error {
 func (h *HiveService) getHS2Port() int {
 	return h.listenerPorts().HiveServer2
 }
-
-// Logs displays Hive service logs
-func (h *HiveService) Logs() error {
-	logDir := h.procMgr.LogDir
-
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		return fmt.Errorf("no Hive logs directory found: %s (have you started Hive?)", logDir)
-	}
-
-	logFiles := []string{
-		filepath.Join(logDir, "metastore.log"),
-		filepath.Join(logDir, "hiveserver2.log"),
-	}
-
-	for _, logFile := range logFiles {
-		fmt.Printf("==> %s\n", logFile)
-		if _, err := os.Stat(logFile); err == nil {
-			cmd := exec.Command("tail", "-n", "120", logFile)
-			cmd.Stdout = os.Stdout
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed to tail Hive log %s: %w", logFile, err)
-			}
-		} else {
-			fmt.Println("(missing)")
-		}
-		fmt.Println()
-	}
-
-	return nil
-}
