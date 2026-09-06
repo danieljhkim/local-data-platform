@@ -47,15 +47,8 @@ Examples:
 				return fmt.Errorf("unknown profile '%s'\n\nAvailable profiles: %v\nRun: local-data profile list", profileName, profiles)
 			}
 
-			// Check if the profile is already set
-			currentProfile, err := paths.ActiveProfile()
-			if err == nil && currentProfile == profileName {
-				fmt.Printf("Profile '%s' is already active.\n", profileName)
-				fmt.Printf("Runtime config overlay: %s\n", paths.CurrentConfDir())
-				return nil
-			}
-
-			// Set the profile
+			// Set the profile. This also rematerializes an already-active profile,
+			// which lets users repair a missing or stale runtime overlay.
 			if err := pm.Set(profileName); err != nil {
 				return err
 			}
