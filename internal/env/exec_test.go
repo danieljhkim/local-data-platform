@@ -117,9 +117,16 @@ func TestResolveExecutableReportsMissingAndNonExecutablePrograms(t *testing.T) {
 	}
 }
 
-func TestResolveExecutableUsesCurrentDirectoryForEmptyPathEntry(t *testing.T) {
+func TestResolveExecutableRejectsCurrentDirectoryPathEntries(t *testing.T) {
 	dir := t.TempDir()
-	path := writeExecutable(t, dir, "current-dir-tool", "#!/bin/sh\n")
+	name := "current-dir-tool"
+	writeExecutable(t, dir, name, "#!/bin/sh\n")
+	absoluteBin := t.TempDir()
+	writeExecutable(t, absoluteBin, name, "#!/bin/sh\n")
+	if err := os.Mkdir(filepath.Join(dir, "relative-bin"), 0755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	writeExecutable(t, filepath.Join(dir, "relative-bin"), name, "#!/bin/sh\n")
 	previous, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -129,12 +136,17 @@ func TestResolveExecutableUsesCurrentDirectoryForEmptyPathEntry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(previous) })
 
-	got, err := ResolveExecutable("current-dir-tool", []string{"PATH=:"})
-	if err != nil {
-		t.Fatalf("ResolveExecutable() error = %v", err)
-	}
-	if want := "./" + filepath.Base(path); got != want {
-		t.Errorf("resolved path = %q, want %q", got, want)
+	for _, path := range []string{
+		":" + absoluteBin,
+		"." + string(os.PathListSeparator) + absoluteBin,
+		"relative-bin" + string(os.PathListSeparator) + absoluteBin,
+	} {
+		t.Run(path, func(t *testing.T) {
+			_, err := ResolveExecutable(name, []string{"PATH=" + path})
+			if !errors.Is(err, exec.ErrDot) {
+				t.Fatalf("ResolveExecutable() error = %v, want exec.ErrDot", err)
+			}
+		})
 	}
 }
 

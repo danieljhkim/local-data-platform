@@ -119,14 +119,14 @@ func ResolveExecutable(name string, commandEnv []string) (string, error) {
 			dir = "."
 		}
 		candidate := filepath.Join(dir, name)
-		if dir == "." {
-			candidate = "." + string(os.PathSeparator) + name
-		}
 		info, err := os.Stat(candidate)
 		if err != nil {
 			continue
 		}
 		if info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			if !filepath.IsAbs(candidate) {
+				return candidate, &exec.Error{Name: name, Err: exec.ErrDot}
+			}
 			return candidate, nil
 		}
 		if nonExecutable == "" {
