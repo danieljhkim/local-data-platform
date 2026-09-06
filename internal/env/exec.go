@@ -24,11 +24,19 @@ func ExecWithEnv(paths *config.Paths, args []string, extraEnv map[string]string)
 	if len(args) == 0 {
 		return fmt.Errorf("usage: local-data env exec -- <cmd...>")
 	}
-
-	// Compute environment
 	env, err := Compute(paths)
 	if err != nil {
 		return err
+	}
+	return ExecWithEnvironment(env, args, extraEnv)
+}
+
+// ExecWithEnvironment executes a command from a caller-supplied environment
+// snapshot plus extra environment variables. It is for callers that need to
+// derive command arguments from the same active profile snapshot they launch.
+func ExecWithEnvironment(env *Environment, args []string, extraEnv map[string]string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: local-data env exec -- <cmd...>")
 	}
 
 	// Set environment (merged with current)
