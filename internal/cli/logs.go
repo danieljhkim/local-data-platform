@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/spf13/cobra"
@@ -26,6 +28,11 @@ const (
 	// maxTailTruncateRetries bounds restarts when a concurrent truncate
 	// shrinks the file mid-read.
 	maxTailTruncateRetries = 3
+	// followPollInterval controls how quickly --follow notices file changes.
+	// Polling avoids holding descriptors open across rotation or late creation.
+	followPollInterval = 100 * time.Millisecond
+	// followReadBlockSize bounds memory and work per file on each poll.
+	followReadBlockSize = 32 * 1024
 )
 
 // errTailTruncated is returned after bounded retries if the file keeps
@@ -75,9 +82,20 @@ type logsReport struct {
 	Errors   []string
 }
 
+// followedLog is the small amount of state needed to continue a log after
+// its initial suffix has been shown. The identity is retained so replacement
+// is distinct from append even when the new file is larger than the old one.
+type followedLog struct {
+	path   string
+	info   os.FileInfo
+	offset int64
+	exists bool
+}
+
 // NewLogsCmd creates the logs command
 func NewLogsCmd(pathsGetter func() *config.Paths) *cobra.Command {
 	var lines int
+	var follow bool
 	cmd := &cobra.Command{
 		Use:          "logs [hdfs|yarn|hive]",
 		Short:        "Show recent log entries from one or all services",
@@ -101,6 +119,11 @@ logs from a stopped service remain inspectable.
 accepted value is %d. A missing log file is reported as such and is not an
 error; a file that exists but cannot be read is reported as a read error
 without preventing other files from being shown.
+
+--follow first prints that suffix, then continues to print new content until
+interrupted. It notices files created after startup, and continues from the
+beginning of files that are truncated or replaced. New content is emitted in
+bounded chunks and each chunk has a source-path label.
 
 Examples:
   local-data logs                  # Logs for the active profile's services
@@ -128,12 +151,19 @@ Examples:
 			if len(report.Errors) > 0 {
 				return fmt.Errorf("failed to read %d log file(s): %s", len(report.Errors), strings.Join(report.Errors, "; "))
 			}
+			if follow {
+				if err := followLogs(cmd.Context(), cmd.OutOrStdout(), report, followPollInterval); err != nil {
+					return fmt.Errorf("follow log files: %w", err)
+				}
+			}
 			return nil
 		},
 	}
 
 	cmd.Flags().IntVar(&lines, "lines", defaultLogLines,
 		fmt.Sprintf("trailing lines to show per log file (0-%d; 0 lists files without content)", maxLogLines))
+	cmd.Flags().BoolVar(&follow, "follow", false,
+		"continue streaming new log content; files created, truncated, or replaced after startup are followed")
 
 	return cmd
 }
@@ -183,6 +213,142 @@ func collectLogs(paths *config.Paths, profile, target string, lines int) (logsRe
 	}
 
 	return report, nil
+}
+
+// followLogs keeps watching the paths selected for a report after its initial
+// suffix has been rendered. It intentionally reopens each file on every poll:
+// that avoids leaked descriptors and makes replacement detectable without
+// platform-specific filesystem notifications.
+func followLogs(ctx context.Context, w io.Writer, report logsReport, interval time.Duration) error {
+	states, err := newFollowedLogs(report)
+	if err != nil {
+		return err
+	}
+	return followLogStates(ctx, w, states, interval)
+}
+
+func newFollowedLogs(report logsReport) ([]followedLog, error) {
+	var states []followedLog
+	for _, svc := range report.Services {
+		for _, f := range svc.Files {
+			state := followedLog{path: f.Path}
+			info, err := os.Stat(f.Path)
+			if err == nil {
+				if !info.Mode().IsRegular() {
+					return nil, fmt.Errorf("%s is not a regular log file", f.Path)
+				}
+				state.info = info
+				state.offset = info.Size()
+				state.exists = true
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("stat %s: %w", f.Path, err)
+			}
+			states = append(states, state)
+		}
+	}
+	return states, nil
+}
+
+func followLogStates(ctx context.Context, w io.Writer, states []followedLog, interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("follow interval must be positive")
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for i := range states {
+				if err := pollFollowedLog(w, &states[i]); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+// pollFollowedLog writes at most followReadBlockSize newly available bytes.
+// The size snapshot prevents a continuously appending file from turning one
+// poll into unbounded work. A later poll drains the remaining bytes.
+func pollFollowedLog(w io.Writer, state *followedLog) error {
+	info, err := os.Stat(state.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			state.info = nil
+			state.offset = 0
+			state.exists = false
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", state.path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular log file", state.path)
+	}
+
+	if !state.exists || !os.SameFile(state.info, info) || info.Size() < state.offset {
+		state.offset = 0
+	}
+	state.info = info
+	state.exists = true
+	if info.Size() == state.offset {
+		return nil
+	}
+
+	f, err := os.Open(state.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			state.info = nil
+			state.offset = 0
+			state.exists = false
+			return nil
+		}
+		return fmt.Errorf("open %s: %w", state.path, err)
+	}
+	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat opened %s: %w", state.path, err)
+	}
+	if !os.SameFile(info, openedInfo) {
+		// Rotation raced between the path stat and open. Do not emit bytes from
+		// an ambiguous offset; the next poll restarts at byte zero of the new
+		// identity.
+		state.info = nil
+		state.offset = 0
+		state.exists = false
+		return nil
+	}
+	if openedInfo.Size() < state.offset {
+		state.offset = 0
+	}
+	state.info = openedInfo
+	if _, err := f.Seek(state.offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek %s: %w", state.path, err)
+	}
+
+	remaining := openedInfo.Size() - state.offset
+	if remaining > followReadBlockSize {
+		remaining = followReadBlockSize
+	}
+	buf := make([]byte, int(remaining))
+	n, readErr := io.ReadFull(f, buf)
+	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+		return fmt.Errorf("read %s: %w", state.path, readErr)
+	}
+	if n == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "==> %s <==\n", state.path); err != nil {
+		return err
+	}
+	if _, err := w.Write(buf[:n]); err != nil {
+		return err
+	}
+	state.offset += int64(n)
+	return nil
 }
 
 // renderLogsReport prints a collected report with deterministic per-file
