@@ -39,6 +39,14 @@ func (h *HiveService) listenerPorts() hiveListenerPorts {
 	return readHiveListenerPorts(filepath.Join(h.env.HiveConfDir, "hive-site.xml"))
 }
 
+// HiveServer2JDBCURL returns the Beeline URL for the effective HiveServer2
+// listener configuration. The service and command wrapper share this helper
+// so a configured thrift port is used consistently for startup and queries.
+func HiveServer2JDBCURL(hiveConfDir string) string {
+	ports := readHiveListenerPorts(filepath.Join(hiveConfDir, "hive-site.xml"))
+	return fmt.Sprintf("jdbc:hive2://localhost:%d", ports.HiveServer2)
+}
+
 func readHiveListenerPorts(hiveSite string) hiveListenerPorts {
 	ports := defaultHivePorts()
 
