@@ -3,12 +3,54 @@ package env
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestExitCodePreservesChildStatusAndWrappedErrors(t *testing.T) {
+	for _, want := range []int{2, 42} {
+		t.Run(fmt.Sprintf("status-%d", want), func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("exit %d", want))
+			err := cmd.Run()
+			if err == nil {
+				t.Fatal("child unexpectedly succeeded")
+			}
+			wrapped := fmt.Errorf("command failed: %w", err)
+			if got := ExitCode(wrapped); got != want {
+				t.Fatalf("ExitCode() = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestExitCodeMapsSignaledChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal exit mapping is not supported on Windows")
+	}
+
+	err := exec.Command("sh", "-c", "kill -TERM $$").Run()
+	if err == nil {
+		t.Fatal("signaled child unexpectedly succeeded")
+	}
+	if got, want := ExitCode(err), 128+int(syscall.SIGTERM); got != want {
+		t.Fatalf("ExitCode() = %d, want %d", got, want)
+	}
+}
+
+func TestExitCodeUsesZeroForSuccessAndOneForNativeErrors(t *testing.T) {
+	if got := ExitCode(nil); got != 0 {
+		t.Fatalf("ExitCode(nil) = %d, want 0", got)
+	}
+	if got := ExitCode(errors.New("native validation failed")); got != 1 {
+		t.Fatalf("ExitCode(native error) = %d, want 1", got)
+	}
+}
 
 func TestCommandUsesComputedPathInsteadOfParentPath(t *testing.T) {
 	parentBin := t.TempDir()

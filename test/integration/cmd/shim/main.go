@@ -65,10 +65,26 @@ func main() {
 	case "beeline":
 		runBeeline(args)
 	case "hadoop", "pyspark", "spark-submit", "env-probe":
-		return
+		runExitProbe(name, args)
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported shim name %q\n", name)
 		os.Exit(64)
+	}
+}
+
+func runExitProbe(name string, args []string) {
+	if len(args) < 2 || args[0] != "exit-probe" {
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "%s stdout\n", name)
+	fmt.Fprintf(os.Stderr, "%s stderr\n", name)
+	code, err := strconv.Atoi(args[1])
+	if err != nil || code < 0 || code > 125 {
+		fatal(fmt.Errorf("invalid exit probe status %q", args[1]))
+	}
+	if code != 0 {
+		os.Exit(code)
 	}
 }
 
