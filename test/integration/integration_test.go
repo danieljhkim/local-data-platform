@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -163,6 +164,84 @@ func TestHermeticLifecycleAndWrappers(t *testing.T) {
 	for _, pid := range daemonPIDs {
 		waitForPIDExit(t, pid, 5*time.Second)
 	}
+}
+
+func TestEnvExecAndWrapperPreserveChildExitCodesAndStreams(t *testing.T) {
+	s := newSandbox(t)
+	s.initialize(false)
+	s.mustRun(nil, "profile", "set", "local")
+
+	commands := []struct {
+		name string
+		args func(int) []string
+	}{
+		{name: "env exec", args: func(code int) []string {
+			return []string{"env", "exec", "--", "env-probe", "exit-probe", strconv.Itoa(code)}
+		}},
+		{name: "hadoop wrapper", args: func(code int) []string {
+			return []string{"hadoop", "exit-probe", strconv.Itoa(code)}
+		}},
+	}
+
+	for _, command := range commands {
+		for _, want := range []int{0, 2, 42} {
+			t.Run(fmt.Sprintf("%s/status-%d", command.name, want), func(t *testing.T) {
+				output, err := s.run(nil, command.args(want)...)
+				if got := childExitCode(err); got != want {
+					t.Fatalf("exit code = %d, want %d; output:\n%s", got, want, output)
+				}
+				if !strings.Contains(output, "stdout") || !strings.Contains(output, "stderr") {
+					t.Fatalf("child streams missing from output:\n%s", output)
+				}
+			})
+		}
+	}
+}
+
+func TestNativeValidationAndLaunchErrorsRemainReadable(t *testing.T) {
+	s := newSandbox(t)
+	s.initialize(false)
+	s.mustRun(nil, "profile", "set", "local")
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantOutput string
+	}{
+		{
+			name:       "missing command argument",
+			args:       []string{"env", "exec"},
+			wantOutput: "usage: local-data env exec -- <cmd...>",
+		},
+		{
+			name:       "missing executable",
+			args:       []string{"env", "exec", "--", "does-not-exist"},
+			wantOutput: "executable file not found",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := s.run(nil, test.args...)
+			if got := childExitCode(err); got == 0 {
+				t.Fatalf("native error unexpectedly succeeded; output:\n%s", output)
+			}
+			if !strings.Contains(output, test.wantOutput) {
+				t.Fatalf("output missing %q:\n%s", test.wantOutput, output)
+			}
+		})
+	}
+}
+
+func childExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 func TestDownstreamStartupFailureStopsDispatch(t *testing.T) {

@@ -2,11 +2,13 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 )
@@ -48,6 +50,32 @@ func ExecWithEnv(paths *config.Paths, args []string, extraEnv map[string]string)
 
 	// Run and wait
 	return cmd.Run()
+}
+
+// ExitCode returns the process status that should be exposed by the CLI for
+// err. Child process failures retain their exit status, while validation,
+// launch, and other native CLI errors use status 1. A child terminated by a
+// signal follows the conventional shell mapping of 128 plus the signal
+// number.
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 1
+	}
+	if exitErr.ProcessState == nil {
+		return 1
+	}
+	if code := exitErr.ExitCode(); code >= 0 {
+		return code
+	}
+	if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return 1
 }
 
 // Command constructs a command that resolves a bare executable name using the
