@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type invocation struct {
@@ -61,12 +62,64 @@ func main() {
 		runPS(args)
 	case "unrelated":
 		waitForSignal(nil)
-	case "beeline", "hadoop", "pyspark", "spark-submit", "env-probe":
+	case "beeline":
+		runBeeline(args)
+	case "hadoop", "pyspark", "spark-submit", "env-probe":
 		return
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported shim name %q\n", name)
 		os.Exit(64)
 	}
+}
+
+func runBeeline(args []string) {
+	url, ok := beelineURL(args)
+	if !ok {
+		fatal(fmt.Errorf("beeline requires a JDBC URL"))
+	}
+	endpoint, err := hiveServer2Endpoint(url)
+	if err != nil {
+		fatal(err)
+	}
+	conn, err := net.DialTimeout("tcp", endpoint, time.Second)
+	if err != nil {
+		fatal(fmt.Errorf("connect to HiveServer2 at %s: %w", endpoint, err))
+	}
+	if err := conn.Close(); err != nil {
+		fatal(fmt.Errorf("close HiveServer2 connection: %w", err))
+	}
+}
+
+func beelineURL(args []string) (string, bool) {
+	for index, arg := range args {
+		switch {
+		case arg == "-u" || arg == "--url":
+			if index+1 < len(args) {
+				return args[index+1], true
+			}
+			return "", false
+		case strings.HasPrefix(arg, "-u="):
+			return strings.TrimPrefix(arg, "-u="), true
+		case strings.HasPrefix(arg, "--url="):
+			return strings.TrimPrefix(arg, "--url="), true
+		}
+	}
+	return "", false
+}
+
+func hiveServer2Endpoint(jdbcURL string) (string, error) {
+	const prefix = "jdbc:hive2://"
+	if !strings.HasPrefix(jdbcURL, prefix) {
+		return "", fmt.Errorf("unsupported Hive JDBC URL %q", jdbcURL)
+	}
+	endpoint := strings.TrimPrefix(jdbcURL, prefix)
+	if index := strings.IndexAny(endpoint, "/;?"); index >= 0 {
+		endpoint = endpoint[:index]
+	}
+	if _, _, err := net.SplitHostPort(endpoint); err != nil {
+		return "", fmt.Errorf("invalid HiveServer2 endpoint %q: %w", endpoint, err)
+	}
+	return endpoint, nil
 }
 
 func runHDFS(args []string) {

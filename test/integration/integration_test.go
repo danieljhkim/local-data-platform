@@ -132,7 +132,18 @@ func TestHermeticLifecycleAndWrappers(t *testing.T) {
 	assertArgs(t, records, "env-probe", []string{"alpha", "two words"})
 	assertArgs(t, records, "hdfs", []string{"dfs", "-ls", "/"})
 	assertArgs(t, records, "yarn", []string{"node", "-list"})
-	assertArgs(t, records, "beeline", []string{"-u", "jdbc:hive2://localhost:10000", "-e", "SELECT 1"})
+	configuredHiveURL := fmt.Sprintf("jdbc:hive2://localhost:%d", s.hiveServer2Port)
+	assertArgs(t, records, "beeline", []string{"-u", configuredHiveURL, "-e", "SELECT 1"})
+
+	explicitHiveURL := fmt.Sprintf("jdbc:hive2://127.0.0.1:%d", s.hiveServer2Port)
+	s.mustRun(nil, "hive", "-u", explicitHiveURL, "-e", "SELECT 1")
+	records = s.records()
+	assertArgs(t, records, "beeline", []string{"-u", explicitHiveURL, "-e", "SELECT 1"})
+
+	wrongHiveURL := fmt.Sprintf("jdbc:hive2://127.0.0.1:%d", freePort(t))
+	if output, err := s.run(nil, "hive", "-u", wrongHiveURL, "-e", "SELECT 1"); err == nil {
+		t.Fatalf("hive with wrong endpoint unexpectedly succeeded:\n%s", output)
+	}
 	assertArgs(t, records, "spark-submit", []string{"--class", "example.Main", "job.jar"})
 
 	expectedHadoopConf := filepath.Join(s.baseDir, "conf", "current", "hadoop")
@@ -359,7 +370,7 @@ func (s *sandbox) initialize(postgres bool) {
 	} else {
 		args = append(args, "--db-type", "derby")
 	}
-	s.mustRun(strings.NewReader("\n\n\n\n"), args...)
+	s.mustRun(strings.NewReader("\n\n\nempty\n"), args...)
 	for _, profile := range []string{"local", "hdfs"} {
 		s.setGeneratedHivePorts(profile)
 	}

@@ -97,6 +97,20 @@ func TestHiveService_ListenerStatuses_DefaultPorts(t *testing.T) {
 	assertListenerPort(t, statuses, "hiveserver2", 10000)
 }
 
+func TestHiveServer2JDBCURL_UsesEffectivePort(t *testing.T) {
+	defaultService := newTestHiveServiceWithConfig(t)
+	if got, want := HiveServer2JDBCURL(defaultService.env.HiveConfDir), "jdbc:hive2://localhost:10000"; got != want {
+		t.Fatalf("HiveServer2JDBCURL() = %q, want %q", got, want)
+	}
+
+	configuredService := newTestHiveServiceWithConfig(t,
+		util.HadoopProperty{Name: "hive.server2.thrift.port", Value: "11000"},
+	)
+	if got, want := HiveServer2JDBCURL(configuredService.env.HiveConfDir), "jdbc:hive2://localhost:11000"; got != want {
+		t.Fatalf("HiveServer2JDBCURL() = %q, want %q", got, want)
+	}
+}
+
 func TestHiveService_ListenerStatuses_CustomMetastorePort(t *testing.T) {
 	service := newTestHiveServiceWithConfig(t,
 		util.HadoopProperty{Name: "hive.metastore.uris", Value: "thrift://localhost:19083"},

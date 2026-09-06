@@ -1,7 +1,10 @@
 package wrappers
 
 import (
+	"strings"
+
 	envpkg "github.com/danieljhkim/local-data-platform/internal/env"
+	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 	"github.com/spf13/cobra"
 )
 
@@ -14,8 +17,11 @@ func NewHiveCmd(pathsGetter PathsGetter) *cobra.Command {
 		DisableFlagParsing: true, // Critical: pass all args through
 		RunE: func(cmd *cobra.Command, args []string) error {
 			paths := pathsGetter()
-			beelineBase := []string{"beeline", "-u", "jdbc:hive2://localhost:10000"}
-			cmdArgs := append(beelineBase, args...)
+			environment, err := envpkg.Compute(paths)
+			if err != nil {
+				return err
+			}
+			cmdArgs := beelineArgs(hive.HiveServer2JDBCURL(environment.HiveConfDir), args)
 
 			// Set TERM=dumb to work around JNA/JLine terminal issues on Apple Silicon
 			extraEnv := map[string]string{
@@ -27,4 +33,21 @@ func NewHiveCmd(pathsGetter PathsGetter) *cobra.Command {
 	}
 
 	return cmd
+}
+
+func beelineArgs(defaultURL string, args []string) []string {
+	beelineBase := []string{"beeline"}
+	if !hasBeelineURL(args) {
+		beelineBase = append(beelineBase, "-u", defaultURL)
+	}
+	return append(beelineBase, args...)
+}
+
+func hasBeelineURL(args []string) bool {
+	for _, arg := range args {
+		if arg == "-u" || arg == "--url" || strings.HasPrefix(arg, "-u=") || strings.HasPrefix(arg, "--url=") {
+			return true
+		}
+	}
+	return false
 }
