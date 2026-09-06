@@ -168,8 +168,10 @@ func (h *HiveService) startMetastore() (bool, error) {
 	}
 
 	// Start the Metastore
-	cmd := exec.Command("hive", "--service", "metastore")
-	cmd.Env = h.env.Export()
+	cmd, err := env.Command("hive", []string{"--service", "metastore"}, h.env.Export())
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve Hive metastore command: %w", err)
+	}
 
 	logFile := name + ".log"
 	startedPid, err := h.procMgr.Start(name, cmd, logFile)
@@ -193,8 +195,10 @@ func (h *HiveService) startHiveServer2() (bool, error) {
 	}
 
 	// Start HiveServer2
-	cmd := exec.Command("hive", "--service", "hiveserver2")
-	cmd.Env = h.env.Export()
+	cmd, err := env.Command("hive", []string{"--service", "hiveserver2"}, h.env.Export())
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve HiveServer2 command: %w", err)
+	}
 
 	logFile := name + ".log"
 	startedPid, err := h.procMgr.Start(name, cmd, logFile)

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/danieljhkim/local-data-platform/internal/env"
 )
 
 const (
@@ -199,9 +201,10 @@ func WaitForSafeModeWithContext(ctx context.Context, maxRetries int, environment
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		cmd := exec.CommandContext(ctx, "hdfs", "dfsadmin", "-safemode", "get")
-		if environment != nil {
-			cmd.Env = environment
+		cmd, err := env.CommandContext(ctx, "hdfs", []string{"dfsadmin", "-safemode", "get"}, environment)
+		if err != nil {
+			lastErr = err
+			continue
 		}
 		output, err := cmd.Output()
 		if err != nil {

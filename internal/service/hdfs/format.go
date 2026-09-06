@@ -3,11 +3,11 @@ package hdfs
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/danieljhkim/local-data-platform/internal/env"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
 
@@ -187,9 +187,10 @@ func EnsureNameNodeFormattedWithEnv(hadoopConfDir string, runtimeEnv []string) e
 
 // formatNameNode runs the HDFS namenode format command
 func formatNameNode(hadoopConfDir string, runtimeEnv []string) error {
-	cmd := exec.Command("hdfs", "namenode", "-format", "-force", "-nonInteractive")
-
-	cmd.Env = withHadoopConfDir(runtimeEnv, hadoopConfDir)
+	cmd, err := env.Command("hdfs", []string{"namenode", "-format", "-force", "-nonInteractive"}, withHadoopConfDir(runtimeEnv, hadoopConfDir))
+	if err != nil {
+		return err
+	}
 
 	// Capture output to show on error
 	output, err := cmd.CombinedOutput()
@@ -237,7 +238,7 @@ func CreateCommonHDFSDirs(username string) error {
 }
 
 // CreateCommonHDFSDirsWithEnv creates common HDFS directories with custom environment
-func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
+func CreateCommonHDFSDirsWithEnv(username string, runtimeEnv []string) error {
 	// Create directories
 	dirs := []struct {
 		path string
@@ -251,22 +252,22 @@ func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
 
 	for _, dir := range dirs {
 		// Create directory
-		cmd := exec.Command("hdfs", "dfs", "-mkdir", "-p", dir.path)
-		if env != nil {
-			cmd.Env = env
+		cmd, err := env.Command("hdfs", []string{"dfs", "-mkdir", "-p", dir.path}, runtimeEnv)
+		if err != nil {
+			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, runtimeEnv, err)
 		}
 		if err := cmd.Run(); err != nil {
-			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, env, err)
+			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, runtimeEnv, err)
 		}
 
 		// Set permissions if specified
 		if dir.perm != "" {
-			cmd = exec.Command("hdfs", "dfs", "-chmod", dir.perm, dir.path)
-			if env != nil {
-				cmd.Env = env
+			cmd, err = env.Command("hdfs", []string{"dfs", "-chmod", dir.perm, dir.path}, runtimeEnv)
+			if err != nil {
+				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, runtimeEnv, err)
 			}
 			if err := cmd.Run(); err != nil {
-				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, env, err)
+				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, runtimeEnv, err)
 			}
 		}
 	}
@@ -276,11 +277,11 @@ func CreateCommonHDFSDirsWithEnv(username string, env []string) error {
 
 // EnsureSparkHistoryDir ensures the /spark-history directory exists in HDFS
 // This is called before running Spark commands to ensure the history directory exists
-func EnsureSparkHistoryDir(env []string) error {
+func EnsureSparkHistoryDir(runtimeEnv []string) error {
 	// Check if directory exists
-	cmd := exec.Command("hdfs", "dfs", "-test", "-d", "/spark-history")
-	if env != nil {
-		cmd.Env = env
+	cmd, err := env.Command("hdfs", []string{"dfs", "-test", "-d", "/spark-history"}, runtimeEnv)
+	if err != nil {
+		return hdfsControlCommandError("hdfs dfs -test -d /spark-history", runtimeEnv, err)
 	}
 	if err := cmd.Run(); err == nil {
 		// Directory exists
@@ -289,21 +290,21 @@ func EnsureSparkHistoryDir(env []string) error {
 
 	// Create directory
 	util.Log("Creating HDFS /spark-history directory...")
-	cmd = exec.Command("hdfs", "dfs", "-mkdir", "-p", "/spark-history")
-	if env != nil {
-		cmd.Env = env
+	cmd, err = env.Command("hdfs", []string{"dfs", "-mkdir", "-p", "/spark-history"}, runtimeEnv)
+	if err != nil {
+		return hdfsControlCommandError("hdfs dfs -mkdir -p /spark-history", runtimeEnv, err)
 	}
 	if err := cmd.Run(); err != nil {
-		return hdfsControlCommandError("hdfs dfs -mkdir -p /spark-history", env, err)
+		return hdfsControlCommandError("hdfs dfs -mkdir -p /spark-history", runtimeEnv, err)
 	}
 
 	// Set permissions
-	cmd = exec.Command("hdfs", "dfs", "-chmod", "1777", "/spark-history")
-	if env != nil {
-		cmd.Env = env
+	cmd, err = env.Command("hdfs", []string{"dfs", "-chmod", "1777", "/spark-history"}, runtimeEnv)
+	if err != nil {
+		return hdfsControlCommandError("hdfs dfs -chmod 1777 /spark-history", runtimeEnv, err)
 	}
 	if err := cmd.Run(); err != nil {
-		return hdfsControlCommandError("hdfs dfs -chmod 1777 /spark-history", env, err)
+		return hdfsControlCommandError("hdfs dfs -chmod 1777 /spark-history", runtimeEnv, err)
 	}
 
 	return nil
