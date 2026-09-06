@@ -103,6 +103,13 @@ local-data init --user daniel --db-type postgres \
 #       --db-url "jdbc:postgresql://localhost:5432/metastore"
 ```
 
+If dependency setup or schema initialization fails after profiles are written,
+correct the reported problem and rerun `local-data init` without `--force`.
+The command resumes metastore bootstrap from the persisted profile configuration
+and leaves custom profiles and stored credentials unchanged. Existing databases
+and initialized schemas are verified rather than recreated; database creation
+still requires explicit confirmation when the database is absent.
+
 ---
 
 

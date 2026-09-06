@@ -54,7 +54,13 @@ deprecated because it places the secret in process arguments and shell history.`
 				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "==> Profiles already initialized: %s\n", paths.UserProfilesDir()); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "==>   (use: local-data init --force to overwrite)"); err != nil {
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "==> Resuming metastore bootstrap with persisted profile configuration."); err != nil {
+					return err
+				}
+				if err := bootstrapMetastore(cmd, paths); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Metastore bootstrap completed."); err != nil {
 					return err
 				}
 				return nil
@@ -126,7 +132,7 @@ deprecated because it places the secret in process arguments and shell history.`
 				return err
 			}
 
-			if err := runMetastoreBootstrap(paths, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+			if err := bootstrapMetastore(cmd, paths); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Metastore bootstrap completed."); err != nil {
@@ -145,6 +151,13 @@ deprecated because it places the secret in process arguments and shell history.`
 	_ = cmd.Flags().MarkDeprecated("db-password", "places the secret in process arguments and shell history; use --db-password-file, LOCAL_DATA_DB_PASSWORD, or the interactive prompt")
 
 	return cmd
+}
+
+func bootstrapMetastore(cmd *cobra.Command, paths *config.Paths) error {
+	if err := runMetastoreBootstrap(paths, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		return fmt.Errorf("metastore bootstrap failed; correct the dependency and rerun local-data init: %w", err)
+	}
+	return nil
 }
 
 func resolveInitPassword(errOut io.Writer, passwordFile, deprecatedFlag string) (string, error) {

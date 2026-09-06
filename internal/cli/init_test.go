@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -159,37 +160,111 @@ func TestInit_DBPasswordConfirmationRedactsAndAllowsKeepOrReplace(t *testing.T) 
 	}
 }
 
-func TestInit_AlreadyInitializedWithoutForceReturnsWithoutConfirmations(t *testing.T) {
+func TestInit_AlreadyInitializedWithoutForceResumesMetastoreBootstrap(t *testing.T) {
 	baseDir := t.TempDir()
 	paths := config.NewPaths("", baseDir)
 
 	if err := os.MkdirAll(filepath.Join(paths.UserProfilesDir(), "local"), 0755); err != nil {
 		t.Fatalf("mkdir local profile: %v", err)
 	}
+	profilePath := filepath.Join(paths.UserProfilesDir(), "local", "custom-profile.conf")
+	const profileContents = "custom profile configuration\n"
+	if err := os.WriteFile(profilePath, []byte(profileContents), 0600); err != nil {
+		t.Fatalf("write custom profile: %v", err)
+	}
+	settings := config.NewSettingsManager(paths)
+	const password = "persisted-secret"
+	if err := settings.Save(&config.Settings{
+		User:       "custom-user",
+		DBType:     "postgres",
+		DBURL:      "jdbc:postgresql://localhost:5432/metastore",
+		DBPassword: password,
+	}); err != nil {
+		t.Fatalf("save persisted settings: %v", err)
+	}
+	settingsPath := settings.Path()
+	settingsBefore, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read persisted settings: %v", err)
+	}
 
 	orig := runMetastoreBootstrap
+	attempts := 0
 	runMetastoreBootstrap = func(paths *config.Paths, in io.Reader, out, errOut io.Writer) error {
-		t.Fatal("bootstrap should not run when already initialized without --force")
+		attempts++
+		if attempts == 1 {
+			return errors.New("postgres JDBC driver unavailable")
+		}
 		return nil
 	}
 	defer func() { runMetastoreBootstrap = orig }()
 
-	cmd := newInitCmd(func() *config.Paths { return paths })
-	out := &bytes.Buffer{}
-	errBuf := &bytes.Buffer{}
-	cmd.SetOut(out)
-	cmd.SetErr(errBuf)
-	cmd.SetIn(strings.NewReader("\n\n\n\n"))
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("init returned error: %v", err)
+	runInit := func() (*bytes.Buffer, *bytes.Buffer, error) {
+		cmd := newInitCmd(func() *config.Paths { return paths })
+		out := &bytes.Buffer{}
+		errBuf := &bytes.Buffer{}
+		cmd.SetOut(out)
+		cmd.SetErr(errBuf)
+		cmd.SetIn(strings.NewReader("\n\n\n\n"))
+		return out, errBuf, cmd.Execute()
 	}
 
-	if !strings.Contains(errBuf.String(), "Profiles already initialized:") {
-		t.Fatalf("missing already initialized notice:\n%s", errBuf.String())
+	_, firstErr, err := runInit()
+	if err == nil {
+		t.Fatal("expected bootstrap failure")
+	}
+	if !strings.Contains(err.Error(), "correct the dependency and rerun local-data init") || !strings.Contains(err.Error(), "postgres JDBC driver unavailable") {
+		t.Fatalf("failure should remain actionable: %v", err)
+	}
+	if !strings.Contains(firstErr.String(), "Profiles already initialized:") || !strings.Contains(firstErr.String(), "Resuming metastore bootstrap with persisted profile configuration.") {
+		t.Fatalf("missing existing-profile resume output:\n%s", firstErr.String())
+	}
+
+	profileAfterFailure, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("read custom profile after failed bootstrap: %v", err)
+	}
+	if string(profileAfterFailure) != profileContents {
+		t.Fatalf("custom profile changed during failed resume: %q", profileAfterFailure)
+	}
+	settingsAfterFailure, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after failed bootstrap: %v", err)
+	}
+	if string(settingsAfterFailure) != string(settingsBefore) {
+		t.Fatal("persisted settings changed during failed resume")
+	}
+
+	out, secondErr, err := runInit()
+	if err != nil {
+		t.Fatalf("retry returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("bootstrap attempts = %d, want 2", attempts)
+	}
+	if !strings.Contains(secondErr.String(), "Profiles already initialized:") || !strings.Contains(secondErr.String(), "Resuming metastore bootstrap with persisted profile configuration.") {
+		t.Fatalf("missing retry resume output:\n%s", secondErr.String())
+	}
+	if !strings.Contains(out.String(), "Metastore bootstrap completed.") {
+		t.Fatalf("missing metastore readiness output:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "confirm user to be:") {
-		t.Fatalf("confirmation prompts should not be shown:\n%s", out.String())
+		t.Fatalf("confirmation prompts should not be shown during resume:\n%s", out.String())
+	}
+
+	profileAfterRetry, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("read custom profile after retry: %v", err)
+	}
+	if string(profileAfterRetry) != profileContents {
+		t.Fatalf("custom profile changed during retry: %q", profileAfterRetry)
+	}
+	settingsAfterRetry, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after retry: %v", err)
+	}
+	if string(settingsAfterRetry) != string(settingsBefore) {
+		t.Fatal("persisted settings changed during retry")
 	}
 }
 
