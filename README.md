@@ -142,6 +142,9 @@ local-data logs hive
 # Control how many trailing lines are shown per log file (default 120)
 local-data logs hive --lines 50
 
+# Print that suffix, then continue streaming newly appended Hive log content
+local-data logs hive --follow --lines 20
+
 # List the selected log files without printing content
 local-data logs hive --lines 0
 
@@ -194,7 +197,7 @@ Setting precedence (highest to lowest):
 - `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`, `HIVE_CONF_DIR`, and `PATH` set to use the overlay
 - Services write logs to `$BASE_DIR/state/<service>/logs`
 - PID files are managed in `$BASE_DIR/state/<service>/pids`
-- `local-data logs [hdfs|yarn|hive] --lines N` selects services the same way `status` does (no argument follows the active profile: `local` shows Hive only, `hdfs` shows HDFS+YARN+Hive; an explicit service name always applies regardless of profile). `--lines` defaults to 120, accepts 0 for a metadata-only listing of the log files, and is bounded at 100000. Log files are located by fixed on-disk path, so stopped services and missing Hadoop/Hive/Spark executables don't prevent existing logs from being tailed; a missing file is reported as such, and a read failure on one file doesn't suppress output from the others.
+- `local-data logs [hdfs|yarn|hive] --lines N` selects services the same way `status` does (no argument follows the active profile: `local` shows Hive only, `hdfs` shows HDFS+YARN+Hive; an explicit service name always applies regardless of profile). `--lines` defaults to 120, accepts 0 for a metadata-only listing of the log files, and is bounded at 100000. Add `--follow` to print the initial suffix and keep streaming new content until interrupted. It follows files created after startup and resumes from the start after truncation or replacement; each emitted chunk is labelled with its source path. Log files are located by fixed on-disk path, so stopped services and missing Hadoop/Hive/Spark executables don't prevent existing logs from being tailed; a missing file is reported as such, and a read failure on one file doesn't suppress output from the others.
 
 ---
 

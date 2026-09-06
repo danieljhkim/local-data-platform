@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,6 +297,186 @@ func TestLogsCmd_ReadFailureReturnsNonzeroExitButKeepsOtherOutput(t *testing.T) 
 	}
 	if !strings.Contains(out.String(), "ready") {
 		t.Fatalf("expected hiveserver2.log output despite metastore.log read error:\n%s", out.String())
+	}
+}
+
+type lockedLogsBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogsBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogsBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func appendLog(t *testing.T, path, content string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open %s for append: %v", path, err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		t.Fatalf("append %s: %v", path, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", path, err)
+	}
+}
+
+func waitForFollowOutput(t *testing.T, output func() string, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		got := output()
+		allFound := true
+		for _, part := range want {
+			if !strings.Contains(got, part) {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in follow output:\n%s", want, output())
+}
+
+func runFollow(t *testing.T, states []followedLog, output io.Writer) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- followLogStates(ctx, output, states, time.Millisecond)
+	}()
+	return cancel, done
+}
+
+func TestFollowLogs_AppendsBothHiveLogsWithSourceLabels(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	metastore := writeLogFixture(t, paths, "hive", "metastore.log", "old-meta\ninitial-meta\n")
+	hiveserver2 := writeLogFixture(t, paths, "hive", "hiveserver2.log", "old-hs2\ninitial-hs2\n")
+	report, err := collectLogs(paths, "local", "hive", 1)
+	if err != nil {
+		t.Fatalf("collectLogs: %v", err)
+	}
+	states, err := newFollowedLogs(report)
+	if err != nil {
+		t.Fatalf("newFollowedLogs: %v", err)
+	}
+
+	var output lockedLogsBuffer
+	if err := renderLogsReport(&output, report); err != nil {
+		t.Fatalf("render initial report: %v", err)
+	}
+	cancel, done := runFollow(t, states, &output)
+	appendLog(t, metastore, "new-meta\n")
+	appendLog(t, hiveserver2, "new-hs2\n")
+	waitForFollowOutput(t, output.String, "new-meta", "new-hs2", "==> "+metastore+" <==", "==> "+hiveserver2+" <==")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLogStates: %v", err)
+	}
+	if strings.Contains(output.String(), "old-meta") || strings.Contains(output.String(), "old-hs2") {
+		t.Fatalf("initial --lines suffix replayed discarded history:\n%s", output.String())
+	}
+}
+
+func TestFollowLogs_FollowsFileCreatedAfterStartup(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	report, err := collectLogs(paths, "local", "hive", 20)
+	if err != nil {
+		t.Fatalf("collectLogs: %v", err)
+	}
+	states, err := newFollowedLogs(report)
+	if err != nil {
+		t.Fatalf("newFollowedLogs: %v", err)
+	}
+	var output lockedLogsBuffer
+	cancel, done := runFollow(t, states, &output)
+	metastore := writeLogFixture(t, paths, "hive", "metastore.log", "created-late\n")
+	waitForFollowOutput(t, output.String, "==> "+metastore+" <==", "created-late")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLogStates: %v", err)
+	}
+}
+
+func TestFollowLogs_ResetsAfterTruncateAndReplacement(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	metastore := writeLogFixture(t, paths, "hive", "metastore.log", "long-original-content\n")
+	report, err := collectLogs(paths, "local", "hive", 1)
+	if err != nil {
+		t.Fatalf("collectLogs: %v", err)
+	}
+	states, err := newFollowedLogs(report)
+	if err != nil {
+		t.Fatalf("newFollowedLogs: %v", err)
+	}
+	var output lockedLogsBuffer
+	cancel, done := runFollow(t, states, &output)
+	if err := os.WriteFile(metastore, []byte("after-truncate\n"), 0644); err != nil {
+		t.Fatalf("truncate %s: %v", metastore, err)
+	}
+	waitForFollowOutput(t, output.String, "after-truncate")
+
+	rotated := metastore + ".1"
+	if err := os.Rename(metastore, rotated); err != nil {
+		t.Fatalf("rotate %s: %v", metastore, err)
+	}
+	if err := os.WriteFile(metastore, []byte("after-replacement\n"), 0644); err != nil {
+		t.Fatalf("replace %s: %v", metastore, err)
+	}
+	waitForFollowOutput(t, output.String, "after-replacement")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLogStates: %v", err)
+	}
+}
+
+func TestFollowLogs_CancellationReturnsPromptly(t *testing.T) {
+	states := []followedLog{{path: filepath.Join(t.TempDir(), "missing.log")}}
+	var output lockedLogsBuffer
+	cancel, done := runFollow(t, states, &output)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("followLogStates: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("followLogStates did not stop promptly after cancellation")
+	}
+}
+
+func TestLogsCmd_FollowRendersInitialSuffixAndHonorsCancellation(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	writeLogFixture(t, paths, "hive", "metastore.log", "discarded\ninitial\n")
+	writeLogFixture(t, paths, "hive", "hiveserver2.log", "server-initial\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := NewLogsCmd(func() *config.Paths { return paths })
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"hive", "--follow", "--lines", "1"})
+	if err := cmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("logs hive --follow: %v", err)
+	}
+	got := output.String()
+	if strings.Contains(got, "discarded") || !strings.Contains(got, "initial") || !strings.Contains(got, "server-initial") {
+		t.Fatalf("initial follow suffix = %q", got)
 	}
 }
 
