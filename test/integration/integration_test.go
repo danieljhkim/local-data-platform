@@ -336,15 +336,18 @@ func TestStalePIDOwnershipMismatchDoesNotKillUnrelatedProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output := s.mustRun(nil, "stop", "hive")
+	output, err := s.run(nil, "stop", "hive")
+	if err == nil {
+		t.Fatalf("stop hive unexpectedly succeeded after ownership mismatch:\n%s", output)
+	}
 	if !strings.Contains(output, "refusing to stop Hive metastore") || !strings.Contains(output, "does not match expected service") {
 		t.Fatalf("ownership mismatch was not reported:\n%s", output)
 	}
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("unrelated process was signaled by stop: %v", err)
 	}
-	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
-		t.Fatalf("stale PID file still exists after guarded stop: %v", err)
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatalf("PID ownership record was removed after guarded stop: %v", err)
 	}
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {

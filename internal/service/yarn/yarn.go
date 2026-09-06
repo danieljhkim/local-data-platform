@@ -2,6 +2,7 @@ package yarn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,17 +251,16 @@ func (y *YARNService) Stop() error {
 		{"nodemanager", "NodeManager"},
 		{"resourcemanager", "ResourceManager"},
 	}
+	var stopErrors []error
 
 	for _, svc := range services {
-		// Try to stop via PID file
-		pid, err := y.procMgr.Status(svc.name)
-		if err == nil && pid > 0 {
-			if err := y.procMgr.Stop(svc.name); err != nil {
-				util.Warn("Failed to stop YARN %s via PID file: %v", svc.name, err)
-			} else {
-				util.Success("Stopped YARN %s (pid %d).", svc.name, pid)
-				continue
-			}
+		if err := y.procMgr.Stop(svc.name); err != nil {
+			util.Warn("Failed to stop YARN %s via PID file: %v", svc.name, err)
+			stopErrors = append(stopErrors, fmt.Errorf("yarn %s: %w", svc.name, err))
+			// Preserve ProcessManager's PID ownership record when inspection or
+			// termination is uncertain rather than falling back to an unverified
+			// process discovery result.
+			continue
 		}
 
 		// Fallback: try to find via jps
@@ -268,19 +268,14 @@ func (y *YARNService) Stop() error {
 		if jpsPid > 0 && isProcessRunning(jpsPid) {
 			if err := killProcess(jpsPid); err != nil {
 				util.Warn("Failed to stop YARN %s via jps: %v", svc.name, err)
+				stopErrors = append(stopErrors, fmt.Errorf("yarn %s via jps: %w", svc.name, err))
 			} else {
 				util.Success("Stopped YARN %s (pid %d) via jps.", svc.name, jpsPid)
 			}
 		}
-
-		// Clean up PID file
-		pidFile := filepath.Join(y.procMgr.PidDir, svc.name+".pid")
-		if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
-			util.Warn("Failed to remove YARN PID file %s: %v", pidFile, err)
-		}
 	}
 
-	return nil
+	return errors.Join(stopErrors...)
 }
 
 // Status returns the status of YARN services

@@ -35,11 +35,14 @@ func TestHiveServiceStop_RejectsUnrelatedPIDFileProcess(t *testing.T) {
 	pm.ValidatePID = hivePIDValidator()
 	h := &HiveService{procMgr: pm}
 
-	if err := h.Stop(); err != nil {
-		t.Fatalf("Stop() error = %v", err)
+	if err := h.Stop(); err == nil {
+		t.Fatal("Stop() should report an unverified PID-file process")
 	}
 	if !processRunning(cmd) {
 		t.Fatal("unrelated process was signaled")
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatalf("PID ownership record was removed after rejected stop: %v", err)
 	}
 }
 

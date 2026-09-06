@@ -247,23 +247,16 @@ func (h *HiveService) Stop() error {
 
 	// Stop in reverse order: HiveServer2, then Metastore
 	services := []string{"hiveserver2", "metastore"}
+	var stopErrors []error
 
 	for _, svc := range services {
-		pid, err := h.procMgr.Status(svc)
-		if err == nil && pid > 0 {
-			if err := h.procMgr.Stop(svc); err != nil {
-				util.Warn("Failed to stop Hive %s: %v", svc, err)
-			} else {
-				util.Success("Stopped Hive %s (pid %d).", svc, pid)
-			}
+		if err := h.procMgr.Stop(svc); err != nil {
+			util.Warn("Failed to stop Hive %s: %v", svc, err)
+			stopErrors = append(stopErrors, fmt.Errorf("hive %s: %w", svc, err))
 		}
-
-		// Clean up PID file
-		pidFile := filepath.Join(h.procMgr.PidDir, svc+".pid")
-		removeFile(pidFile)
 	}
 
-	return nil
+	return errors.Join(stopErrors...)
 }
 
 // StopForce performs a force-stop of Hive services

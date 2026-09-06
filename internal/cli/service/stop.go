@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
@@ -51,21 +52,26 @@ Examples:
 					}
 				} else {
 					// HDFS profile: stop all services in reverse order
+					var stopErrors []error
 					util.Section("stop hive")
 					if err := stopHive(paths); err != nil {
-						return err
+						stopErrors = append(stopErrors, fmt.Errorf("hive: %w", err))
 					}
 
 					fmt.Println()
 					util.Section("stop yarn")
 					if err := stopYARN(paths); err != nil {
-						return err
+						stopErrors = append(stopErrors, fmt.Errorf("yarn: %w", err))
 					}
 
 					fmt.Println()
 					util.Section("stop hdfs")
 					if err := stopHDFS(paths); err != nil {
-						return err
+						stopErrors = append(stopErrors, fmt.Errorf("hdfs: %w", err))
+					}
+
+					if err := errors.Join(stopErrors...); err != nil {
+						return fmt.Errorf("one or more services failed to stop: %w", err)
 					}
 				}
 
