@@ -179,18 +179,20 @@ func doctorCommandFound(command string, commandEnv []string) bool {
 }
 
 // Print prints the doctor check results
-func (dr *DoctorResult) Print() {
-	dr.PrintTo(os.Stdout)
+func (dr *DoctorResult) Print() error {
+	return dr.PrintTo(os.Stdout)
 }
 
 // PrintTo renders the human-readable doctor report to w.
-func (dr *DoctorResult) PrintTo(w io.Writer) {
+func (dr *DoctorResult) PrintTo(w io.Writer) error {
 	targetStr := "general"
 	if dr.Target != "" {
 		targetStr = dr.Target
 	}
 
-	fmt.Fprintf(w, "Doctor (%s):\n", targetStr)
+	if _, err := fmt.Fprintf(w, "Doctor (%s):\n", targetStr); err != nil {
+		return err
+	}
 
 	// Print check results
 	for _, check := range dr.Checks {
@@ -207,14 +209,21 @@ func (dr *DoctorResult) PrintTo(w io.Writer) {
 			msg = fmt.Sprintf("%s (optional)", check.Command)
 		}
 
-		fmt.Fprintf(w, "  %s %s\n", status, msg)
+		if _, err := fmt.Fprintf(w, "  %s %s\n", status, msg); err != nil {
+			return err
+		}
 	}
 
 	// Java version warning
 	if dr.JavaMajor != 0 && dr.JavaMajor != 17 {
-		fmt.Fprintf(w, "  %s java major version is %d (recommended: 17)\n", util.Colorf(util.Yellow, "WARN"), dr.JavaMajor)
-		fmt.Fprintln(w, "       Fix: install Java 17 and set JAVA_HOME")
+		if _, err := fmt.Fprintf(w, "  %s java major version is %d (recommended: 17)\n", util.Colorf(util.Yellow, "WARN"), dr.JavaMajor); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w, "       Fix: install Java 17 and set JAVA_HOME"); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // JSONReport returns the stable, secret-free representation of this result.

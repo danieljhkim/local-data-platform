@@ -80,7 +80,7 @@ func ExitCode(err error) int {
 	if code := exitErr.ExitCode(); code >= 0 {
 		return code
 	}
-	if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		return 128 + int(status.Signal())
 	}
 	return 1

@@ -47,7 +47,7 @@ func (p *Paths) runConfigHook(point string) error {
 	return nil
 }
 
-func withConfigLock(paths *Paths, fn func() error) error {
+func withConfigLock(paths *Paths, fn func() error) (err error) {
 	if err := os.MkdirAll(paths.BaseDir, 0700); err != nil {
 		return fmt.Errorf("failed to create configuration base directory: %w", err)
 	}
@@ -57,7 +57,11 @@ func withConfigLock(paths *Paths, fn func() error) error {
 	if err != nil {
 		return fmt.Errorf("failed to open configuration lock: %w", err)
 	}
-	defer lockFile.Close()
+	defer func() {
+		if closeErr := lockFile.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close configuration lock: %w", closeErr)
+		}
+	}()
 	if err := os.Chmod(lockPath, util.PrivateFileMode); err != nil {
 		return fmt.Errorf("failed to secure configuration lock: %w", err)
 	}
@@ -289,21 +293,29 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-func syncFile(path string) error {
+func syncFile(path string) (err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 	return f.Sync()
 }
 
-func syncDir(path string) error {
+func syncDir(path string) (err error) {
 	dir, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 	if err := dir.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) {
 		return err
 	}

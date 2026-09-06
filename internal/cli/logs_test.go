@@ -256,6 +256,25 @@ func TestLogsCmd_PrintsDeterministicSourceLabelsAndTail(t *testing.T) {
 	}
 }
 
+type failingLogsWriter struct{}
+
+func (failingLogsWriter) Write([]byte) (int, error) {
+	return 0, errors.New("writer unavailable")
+}
+
+func TestLogsCmd_ReturnsOutputWriteError(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	cmd := NewLogsCmd(func() *config.Paths { return paths })
+	cmd.SetOut(failingLogsWriter{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"hive", "--lines", "0"})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "writer unavailable") {
+		t.Fatalf("Execute() error = %v, want output write error", err)
+	}
+}
+
 func TestLogsCmd_ReadFailureReturnsNonzeroExitButKeepsOtherOutput(t *testing.T) {
 	paths := &config.Paths{BaseDir: t.TempDir()}
 	dir := paths.ServiceStateDir("hive").LogsDir
@@ -388,7 +407,11 @@ func TestTailRegularFile_CountingSeamReadsSuffixNotWholeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer opened.Close()
+	t.Cleanup(func() {
+		if closeErr := opened.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
 	cf := &countingFile{File: opened}
 
 	got, err := tailRegularFile(cf, wantLines)
@@ -422,7 +445,7 @@ func TestTailRegularFile_EmptyInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tailRegularFile: %v", err)
 	}
-	if got != nil && len(got) != 0 {
+	if len(got) != 0 {
 		t.Fatalf("lines = %#v, want empty", got)
 	}
 }
