@@ -96,7 +96,7 @@ Examples:
 }
 
 func stopHDFS(paths *config.Paths) error {
-	svc, err := hdfs.NewHDFSService(paths)
+	svc, err := hdfs.NewHDFSObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create HDFS service: %w", err)
 	}
@@ -105,7 +105,7 @@ func stopHDFS(paths *config.Paths) error {
 }
 
 func stopYARN(paths *config.Paths) error {
-	svc, err := yarn.NewYARNService(paths)
+	svc, err := yarn.NewYARNObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create YARN service: %w", err)
 	}
@@ -114,7 +114,7 @@ func stopYARN(paths *config.Paths) error {
 }
 
 func stopHive(paths *config.Paths) error {
-	svc, err := hive.NewHiveService(paths)
+	svc, err := hive.NewHiveObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create Hive service: %w", err)
 	}

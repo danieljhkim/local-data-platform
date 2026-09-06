@@ -32,6 +32,7 @@ type HiveService struct {
 	listenerProbeHook    func(context.Context, string) error
 	listenerRetries      int
 	stopHook             func(string) error
+	listenerSettingsErr  error
 }
 
 // NewHiveService creates a new Hive service manager
@@ -44,17 +45,38 @@ func NewHiveService(paths *config.Paths) (*HiveService, error) {
 	return newHiveServiceWithEnv(paths, environment)
 }
 
+// NewHiveObservationService builds a service manager for status and shutdown
+// from stable state paths. It never computes or republishes the active
+// configuration overlay. Missing listener settings are retained as a partial
+// observation error so PID ownership inspection can still proceed.
+func NewHiveObservationService(paths *config.Paths) (*HiveService, error) {
+	service, err := newHiveService(paths, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(paths.CurrentHiveConf(), "hive-site.xml")); err != nil {
+		service.listenerSettingsErr = fmt.Errorf("Hive listener settings unavailable: %w", err)
+	}
+	return service, nil
+}
+
 // newHiveServiceWithEnv builds a Hive service manager from an already-computed
 // environment. Exposed so unit tests can inject a deterministic environment
 // without depending on Hadoop/Hive discovery being available on the host.
 func newHiveServiceWithEnv(paths *config.Paths, environment *env.Environment) (*HiveService, error) {
+	return newHiveService(paths, environment, true)
+}
+
+func newHiveService(paths *config.Paths, environment *env.Environment, createStateDirs bool) (*HiveService, error) {
 	stateDir := filepath.Join(paths.StateDir(), "hive")
 	pidDir := filepath.Join(stateDir, "pids")
 	logDir := filepath.Join(stateDir, "logs")
 	warehouseDir := filepath.Join(stateDir, "warehouse")
 
-	if err := util.MkdirAll(pidDir, logDir, warehouseDir); err != nil {
-		return nil, fmt.Errorf("failed to create Hive directories: %w", err)
+	if createStateDirs {
+		if err := util.MkdirAll(pidDir, logDir, warehouseDir); err != nil {
+			return nil, fmt.Errorf("failed to create Hive directories: %w", err)
+		}
 	}
 
 	procMgr := &service.ProcessManager{
@@ -299,6 +321,12 @@ func (h *HiveService) Status() ([]service.ServiceStatus, error) {
 // ListenerStatuses returns the listener status for Hive ports
 func (h *HiveService) ListenerStatuses() []ListenerStatus {
 	ports := h.listenerPorts()
+	if h.listenerSettingsErr != nil {
+		return []ListenerStatus{
+			{Label: "metastore", Port: ports.Metastore, ProbeError: h.listenerSettingsErr},
+			{Label: "hiveserver2", Port: ports.HiveServer2, ProbeError: h.listenerSettingsErr},
+		}
+	}
 	if _, err := exec.LookPath("lsof"); err != nil {
 		probeErr := fmt.Errorf("lsof is not available: %w", err)
 		return []ListenerStatus{

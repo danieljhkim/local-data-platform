@@ -82,7 +82,7 @@ func statusRows(statuses []svc.ServiceStatus) []util.StatusTableRow {
 }
 
 func statusHDFS(paths *config.Paths) error {
-	service, err := hdfs.NewHDFSService(paths)
+	service, err := hdfs.NewHDFSObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create HDFS service: %w", err)
 	}
@@ -97,7 +97,7 @@ func statusHDFS(paths *config.Paths) error {
 }
 
 func statusYARN(paths *config.Paths) error {
-	service, err := yarn.NewYARNService(paths)
+	service, err := yarn.NewYARNObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create YARN service: %w", err)
 	}
@@ -112,7 +112,7 @@ func statusYARN(paths *config.Paths) error {
 }
 
 func statusHive(paths *config.Paths) error {
-	service, err := hive.NewHiveService(paths)
+	service, err := hive.NewHiveObservationService(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create Hive service: %w", err)
 	}
@@ -193,9 +193,9 @@ type statusFactories struct {
 
 func defaultStatusFactories() statusFactories {
 	return statusFactories{
-		hdfs: func(paths *config.Paths) (statusCollector, error) { return hdfs.NewHDFSService(paths) },
-		yarn: func(paths *config.Paths) (statusCollector, error) { return yarn.NewYARNService(paths) },
-		hive: func(paths *config.Paths) (hiveStatusCollector, error) { return hive.NewHiveService(paths) },
+		hdfs: func(paths *config.Paths) (statusCollector, error) { return hdfs.NewHDFSObservationService(paths) },
+		yarn: func(paths *config.Paths) (statusCollector, error) { return yarn.NewYARNObservationService(paths) },
+		hive: func(paths *config.Paths) (hiveStatusCollector, error) { return hive.NewHiveObservationService(paths) },
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +12,23 @@ import (
 	svc "github.com/danieljhkim/local-data-platform/internal/service"
 	"github.com/danieljhkim/local-data-platform/internal/service/hive"
 )
+
+func TestCollectStatusObservesHivePIDsWhenListenerConfigIsMissing(t *testing.T) {
+	paths := config.NewPaths(t.TempDir(), filepath.Join(t.TempDir(), "missing-runtime"))
+
+	report := collectStatus(paths, "local", "hive")
+	if len(report.Services) != 1 || len(report.Services[0].Processes) != 2 {
+		t.Fatalf("report = %#v, want Hive PID observations despite absent configuration", report)
+	}
+	if len(report.Services[0].Listeners) != 2 {
+		t.Fatalf("report = %#v, want partial listener observations", report)
+	}
+	for _, observation := range report.Errors {
+		if observation.Probe == "process_status" {
+			t.Fatalf("report = %#v, startup configuration unexpectedly blocked process status", report)
+		}
+	}
+}
 
 type fakeStatusCollector struct {
 	statuses []svc.ServiceStatus

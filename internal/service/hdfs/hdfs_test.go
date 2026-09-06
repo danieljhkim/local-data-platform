@@ -15,6 +15,22 @@ import (
 	"github.com/danieljhkim/local-data-platform/internal/service"
 )
 
+func TestNewHDFSObservationServiceAvoidsStartupEnvironment(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "missing-runtime")
+	paths := config.NewPaths(t.TempDir(), baseDir)
+
+	observed, err := NewHDFSObservationService(paths)
+	if err != nil {
+		t.Fatalf("NewHDFSObservationService() error = %v", err)
+	}
+	if observed.env != nil {
+		t.Fatal("observation service unexpectedly computed a startup environment")
+	}
+	if observed.procMgr.PidDir != paths.HDFSPaths().PidsDir {
+		t.Fatalf("PID directory = %q, want stable runtime path %q", observed.procMgr.PidDir, paths.HDFSPaths().PidsDir)
+	}
+}
+
 func TestStartComponents_DataNodeFailureRollsBackNewNameNode(t *testing.T) {
 	var stopped []string
 	h := newTransactionalTestService(&stopped)
