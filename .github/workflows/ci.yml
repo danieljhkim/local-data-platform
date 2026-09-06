@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Hermetic integration test
+        run: make test-integration
+
       - name: Race test internal packages
         run: go test -race ./internal/...
 
