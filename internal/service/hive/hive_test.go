@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/env"
@@ -403,6 +405,56 @@ func TestHiveWaitForListener_TimeoutIsActionable(t *testing.T) {
 	err := h.waitForListener(context.Background(), "Hive metastore", "metastore", 19083)
 	if err == nil || !strings.Contains(err.Error(), "Hive metastore listener on port 19083") || !strings.Contains(err.Error(), "/diagnostic/logs/metastore.log") {
 		t.Fatalf("waitForListener() error = %v, want port and diagnostic log context", err)
+	}
+}
+
+func TestHiveStop_RetainsPIDRecordsWhenTerminationIsUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		inspectErr error
+	}{
+		{name: "inspection failure", inspectErr: errors.New("injected inspection failure")},
+		{name: "timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pidDir := t.TempDir()
+			for name, pid := range map[string]string{"hiveserver2": "41", "metastore": "42"} {
+				if err := os.WriteFile(filepath.Join(pidDir, name+".pid"), []byte(pid), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			inspected := map[int]int{}
+			signals := []syscall.Signal{}
+			pm := &service.ProcessManager{
+				PidDir:      pidDir,
+				StopTimeout: time.Nanosecond,
+				CheckRunning: func(pid int) (bool, error) {
+					inspected[pid]++
+					return tc.inspectErr == nil, tc.inspectErr
+				},
+				Signal: func(_ int, signal syscall.Signal) error {
+					signals = append(signals, signal)
+					return nil
+				},
+			}
+
+			err := (&HiveService{procMgr: pm}).Stop()
+			if err == nil || !strings.Contains(err.Error(), "hiveserver2") || !strings.Contains(err.Error(), "metastore") {
+				t.Fatalf("Stop() error = %v, want both failed components", err)
+			}
+			for name := range map[string]struct{}{"hiveserver2": {}, "metastore": {}} {
+				if _, statErr := os.Stat(filepath.Join(pidDir, name+".pid")); statErr != nil {
+					t.Fatalf("%s PID record was removed after uncertain termination: %v", name, statErr)
+				}
+			}
+			if inspected[41] == 0 || inspected[42] == 0 {
+				t.Fatalf("inspected = %#v, want shutdown attempts for both components", inspected)
+			}
+			if tc.inspectErr == nil && !reflect.DeepEqual(signals, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGKILL}) {
+				t.Fatalf("signals = %v, want timeout escalation for both components", signals)
+			}
+		})
 	}
 }
 

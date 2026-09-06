@@ -2,6 +2,7 @@ package hdfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -299,15 +300,16 @@ func (h *HDFSService) stopStaleDaemon(name string, pid int, foundByPIDFile bool)
 func (h *HDFSService) Stop() error {
 	// Stop in reverse order: DataNode first, then NameNode
 	services := []string{"datanode", "namenode"}
+	var stopErrors []error
 
 	for _, svc := range services {
 		if err := h.procMgr.Stop(svc); err != nil {
 			util.Warn("Failed to stop %s: %v", svc, err)
-		} else {
-			pid, _ := h.procMgr.Status(svc)
-			if pid == 0 {
-				util.Success("Stopped HDFS %s.", svc)
-			}
+			stopErrors = append(stopErrors, fmt.Errorf("hdfs %s: %w", svc, err))
+			// ProcessManager deliberately retains the PID file when it cannot
+			// confirm termination. Do not bypass that ownership check with
+			// discovery or remove the record ourselves.
+			continue
 		}
 
 		// Also try to find and stop via process discovery
@@ -321,13 +323,14 @@ func (h *HDFSService) Stop() error {
 		if pid, _ := findPID(); pid != 0 && IsProcessRunning(pid) {
 			if err := terminateHDFSPID(pid); err != nil {
 				util.Warn("Failed to stop HDFS %s (pid %d): %v", svc, pid, err)
+				stopErrors = append(stopErrors, fmt.Errorf("hdfs %s (pid %d): %w", svc, pid, err))
 			} else {
 				util.Success("Stopped HDFS %s (pid %d).", svc, pid)
 			}
 		}
 	}
 
-	return nil
+	return errors.Join(stopErrors...)
 }
 
 // Status returns the status of HDFS services

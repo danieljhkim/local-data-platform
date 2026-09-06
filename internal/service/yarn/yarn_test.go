@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 	"github.com/danieljhkim/local-data-platform/internal/env"
@@ -320,6 +321,56 @@ func TestYARNStart_NodeManagerFailureRollsBackOnlyNewResourceManager(t *testing.
 			}
 			if !reflect.DeepEqual(stopped, tc.wantStopped) {
 				t.Fatalf("stopped = %#v, want %#v", stopped, tc.wantStopped)
+			}
+		})
+	}
+}
+
+func TestYARNStop_RetainsPIDRecordsWhenTerminationIsUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		inspectErr error
+	}{
+		{name: "inspection failure", inspectErr: errors.New("injected inspection failure")},
+		{name: "timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pidDir := t.TempDir()
+			for name, pid := range map[string]string{"nodemanager": "41", "resourcemanager": "42"} {
+				if err := os.WriteFile(filepath.Join(pidDir, name+".pid"), []byte(pid), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			inspected := map[int]int{}
+			signals := []syscall.Signal{}
+			pm := &service.ProcessManager{
+				PidDir:      pidDir,
+				StopTimeout: time.Nanosecond,
+				CheckRunning: func(pid int) (bool, error) {
+					inspected[pid]++
+					return tc.inspectErr == nil, tc.inspectErr
+				},
+				Signal: func(_ int, signal syscall.Signal) error {
+					signals = append(signals, signal)
+					return nil
+				},
+			}
+
+			err := (&YARNService{procMgr: pm}).Stop()
+			if err == nil || !strings.Contains(err.Error(), "nodemanager") || !strings.Contains(err.Error(), "resourcemanager") {
+				t.Fatalf("Stop() error = %v, want both failed components", err)
+			}
+			for name := range map[string]struct{}{"nodemanager": {}, "resourcemanager": {}} {
+				if _, statErr := os.Stat(filepath.Join(pidDir, name+".pid")); statErr != nil {
+					t.Fatalf("%s PID record was removed after uncertain termination: %v", name, statErr)
+				}
+			}
+			if inspected[41] == 0 || inspected[42] == 0 {
+				t.Fatalf("inspected = %#v, want shutdown attempts for both components", inspected)
+			}
+			if tc.inspectErr == nil && !reflect.DeepEqual(signals, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL, syscall.SIGTERM, syscall.SIGKILL}) {
+				t.Fatalf("signals = %v, want timeout escalation for both components", signals)
 			}
 		})
 	}
