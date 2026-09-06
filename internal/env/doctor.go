@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -107,10 +108,13 @@ func RunDoctor(target string) *DoctorResult {
 		Target: target,
 	}
 
+	// Match the executable search order used by the runtime without applying a
+	// profile overlay. Doctor must remain usable before profile initialization.
+	commandEnv := doctorCommandEnvironment()
+
 	// Check required commands
-	detector := NewToolDetector()
 	for _, cmd := range required {
-		found := detector.IsInstalled(cmd)
+		found := doctorCommandFound(cmd, commandEnv)
 		result.Checks = append(result.Checks, DoctorCheck{
 			Command:  cmd,
 			Required: true,
@@ -123,13 +127,13 @@ func RunDoctor(target string) *DoctorResult {
 
 	// Check Java version
 	javaDetector := NewJavaDetector()
-	if javaDetector.IsInstalled() {
+	if doctorCommandFound("java", commandEnv) {
 		result.JavaMajor = javaDetector.MajorVersion()
 	}
 
 	// Check optional commands
 	for _, cmd := range optional {
-		found := detector.IsInstalled(cmd)
+		found := doctorCommandFound(cmd, commandEnv)
 		result.Checks = append(result.Checks, DoctorCheck{
 			Command:  cmd,
 			Required: false,
@@ -138,6 +142,40 @@ func RunDoctor(target string) *DoctorResult {
 	}
 
 	return result
+}
+
+// doctorCommandEnvironment builds the executable-search environment that a
+// configured command would use, without requiring profile configuration. The
+// selected installation directories come before the parent PATH so a stale or
+// conflicting shell tool cannot make doctor disagree with command execution.
+func doctorCommandEnvironment() []string {
+	var selected []string
+
+	if javaHome := NewJavaDetector().FindJavaHome(); javaHome != "" {
+		selected = append(selected, filepath.Join(javaHome, "bin"))
+	}
+	if hadoop := FindHadoopInstall(); hadoop != nil {
+		prefix := hadoop.Prefix
+		if prefix == "" {
+			prefix = hadoop.Home
+		}
+		if prefix != "" {
+			selected = append(selected, filepath.Join(prefix, "bin"), filepath.Join(prefix, "sbin"))
+		}
+	}
+	if hiveHome := FindHiveHome(); hiveHome != "" {
+		selected = append(selected, filepath.Join(hiveHome, "bin"))
+	}
+	if sparkHome := FindSparkHome(); sparkHome != "" {
+		selected = append(selected, filepath.Join(sparkHome, "bin"))
+	}
+
+	return []string{"PATH=" + util.DeduplicatePath(selected, os.Getenv("PATH"))}
+}
+
+func doctorCommandFound(command string, commandEnv []string) bool {
+	_, err := ResolveExecutable(command, commandEnv)
+	return err == nil
 }
 
 // Print prints the doctor check results
