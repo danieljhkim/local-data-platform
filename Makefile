@@ -6,6 +6,8 @@
 # Build variables
 BINARY_NAME := local-data
 BUILD_DIR := bin
+PREFIX ?= /usr/local
+INSTALL_DIR := $(PREFIX)/bin
 GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -29,11 +31,11 @@ build: ## Build the Go binary
 
 install: build ## Build and install to $(PREFIX)/bin (default: /usr/local/bin). Override with: make install PREFIX=/custom/path
 	@echo "Installing $(BINARY_NAME) to $(INSTALL_DIR)..."
-	@mkdir -p $(INSTALL_DIR)
-	@if [ -w $(INSTALL_DIR) ]; then \
-		cp $(BUILD_DIR)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME); \
+	@mkdir -p "$(INSTALL_DIR)"
+	@if [ -w "$(INSTALL_DIR)" ]; then \
+		cp "$(BUILD_DIR)/$(BINARY_NAME)" "$(INSTALL_DIR)/$(BINARY_NAME)"; \
 	else \
-		sudo cp $(BUILD_DIR)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME); \
+		sudo cp "$(BUILD_DIR)/$(BINARY_NAME)" "$(INSTALL_DIR)/$(BINARY_NAME)"; \
 	fi
 	@echo "✓ Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
 
