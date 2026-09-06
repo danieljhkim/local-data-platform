@@ -1,6 +1,8 @@
 package env
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -103,6 +105,104 @@ func TestRunDoctor_StartHive(t *testing.T) {
 	if !beelineFound {
 		t.Error("beeline optional check not found")
 	}
+}
+
+func TestRunDoctorUsesSelectedInstallationPaths(t *testing.T) {
+	parentBin := t.TempDir()
+	hadoopHome := t.TempDir()
+	hiveHome := t.TempDir()
+	sparkHome := t.TempDir()
+	for _, bin := range []string{
+		filepath.Join(hadoopHome, "bin"),
+		filepath.Join(hiveHome, "bin"),
+		filepath.Join(sparkHome, "bin"),
+	} {
+		if err := os.MkdirAll(bin, 0755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", bin, err)
+		}
+	}
+
+	for _, command := range []string{"hdfs", "hive", "beeline", "spark-sql"} {
+		writeExecutable(t, parentBin, command, "#!/bin/sh\nexit 0\n")
+	}
+	writeExecutable(t, filepath.Join(hadoopHome, "bin"), "hdfs", "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(hiveHome, "bin"), "hive", "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(hiveHome, "bin"), "beeline", "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(sparkHome, "bin"), "spark-sql", "#!/bin/sh\nexit 0\n")
+
+	t.Setenv("PATH", parentBin)
+	t.Setenv("HADOOP_HOME", hadoopHome)
+	t.Setenv("HIVE_HOME", hiveHome)
+	t.Setenv("SPARK_HOME", sparkHome)
+
+	for _, test := range []struct {
+		target  string
+		command string
+		want    string
+	}{
+		{"start hdfs", "hdfs", filepath.Join(hadoopHome, "bin", "hdfs")},
+		{"start hive", "hive", filepath.Join(hiveHome, "bin", "hive")},
+		{"start hive", "beeline", filepath.Join(hiveHome, "bin", "beeline")},
+		{"", "spark-sql", filepath.Join(sparkHome, "bin", "spark-sql")},
+	} {
+		t.Run(test.target+"/"+test.command, func(t *testing.T) {
+			if path, err := ResolveExecutable(test.command, doctorCommandEnvironment()); err != nil || path != test.want {
+				t.Fatalf("doctor resolution = %q, %v; want selected installation %q", path, err, test.want)
+			}
+			if !doctorCheckFound(RunDoctor(test.target), test.command) {
+				t.Fatalf("doctor did not find selected %s", test.command)
+			}
+		})
+	}
+}
+
+func TestRunDoctorRejectsMissingNonExecutableAndCurrentDirectoryTools(t *testing.T) {
+	missingHome := filepath.Join(t.TempDir(), "missing")
+	nonExecutableHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nonExecutableHome, "bin"), 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nonExecutableHome, "bin", "hive"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("write non-executable hive = %v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HADOOP_HOME", missingHome)
+	t.Setenv("HIVE_HOME", missingHome)
+	t.Setenv("SPARK_HOME", missingHome)
+	if doctorCheckFound(RunDoctor("start hive"), "hive") {
+		t.Fatal("doctor found a missing selected hive executable")
+	}
+
+	t.Setenv("HIVE_HOME", nonExecutableHome)
+	if doctorCheckFound(RunDoctor("start hive"), "hive") {
+		t.Fatal("doctor found a non-executable selected hive executable")
+	}
+
+	currentDir := t.TempDir()
+	writeExecutable(t, currentDir, "hive", "#!/bin/sh\nexit 0\n")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(currentDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	t.Setenv("HIVE_HOME", missingHome)
+	t.Setenv("PATH", ".")
+	if doctorCheckFound(RunDoctor("start hive"), "hive") {
+		t.Fatal("doctor accepted an implicit current-directory hive executable")
+	}
+}
+
+func doctorCheckFound(result *DoctorResult, command string) bool {
+	for _, check := range result.Checks {
+		if check.Command == command {
+			return check.Found
+		}
+	}
+	return false
 }
 
 func TestRunDoctor_ProfileCommands(t *testing.T) {
