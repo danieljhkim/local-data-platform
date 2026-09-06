@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 
@@ -188,10 +187,12 @@ func (h *HDFSService) startNameNode(runtimeEnv []string) (bool, error) {
 	}
 
 	// Start NameNode
-	cmd := exec.Command("hdfs", "namenode")
-	cmd.Env = runtimeEnv
+	cmd, err := env.Command("hdfs", []string{"namenode"}, runtimeEnv)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve NameNode command: %w", err)
+	}
 
-	pid, err := h.procMgr.Start("namenode", cmd, "namenode.log")
+	pid, err = h.procMgr.Start("namenode", cmd, "namenode.log")
 	if err != nil {
 		return false, fmt.Errorf("failed to start NameNode: %w", err)
 	}
@@ -234,10 +235,12 @@ func (h *HDFSService) startDataNode(runtimeEnv []string) (bool, error) {
 	}
 
 	// Start DataNode
-	cmd := exec.Command("hdfs", "datanode")
-	cmd.Env = runtimeEnv
+	cmd, err := env.Command("hdfs", []string{"datanode"}, runtimeEnv)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve DataNode command: %w", err)
+	}
 
-	pid, err := h.procMgr.Start("datanode", cmd, "datanode.log")
+	pid, err = h.procMgr.Start("datanode", cmd, "datanode.log")
 	if err != nil {
 		return false, fmt.Errorf("failed to start DataNode: %w", err)
 	}

@@ -3,9 +3,9 @@ package hive
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
 
+	"github.com/danieljhkim/local-data-platform/internal/env"
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -22,14 +22,16 @@ const (
 // checkMetastoreSchema checks if the Hive metastore schema is initialized
 // Returns SchemaInitialized if schema exists, SchemaNotInitialized if not, SchemaUnknown on error
 func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatus, error) {
-	cmd := exec.Command("schematool", "-dbType", string(dbType), "-info")
-	cmd.Env = h.env.Export()
+	cmd, err := env.Command("schematool", []string{"-dbType", string(dbType), "-info"}, h.env.Export())
+	if err != nil {
+		return SchemaUnknown, err
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	output := stdout.String() + stderr.String()
 
 	// schematool -info returns non-zero if schema is not initialized
@@ -69,14 +71,16 @@ func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatu
 func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
 	util.Log("Initializing Hive metastore schema...")
 
-	cmd := exec.Command("schematool", "-dbType", string(dbType), "-initSchema")
-	cmd.Env = h.env.Export()
+	cmd, err := env.Command("schematool", []string{"-dbType", string(dbType), "-initSchema"}, h.env.Export())
+	if err != nil {
+		return err
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	output := stdout.String() + stderr.String()
 
 	if err != nil {

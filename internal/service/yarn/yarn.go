@@ -157,8 +157,10 @@ func (y *YARNService) startResourceManager() (bool, error) {
 	}
 
 	// Start the ResourceManager
-	cmd := exec.Command("yarn", "resourcemanager")
-	cmd.Env = y.env.Export()
+	cmd, err := env.Command("yarn", []string{"resourcemanager"}, y.env.Export())
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve ResourceManager command: %w", err)
+	}
 
 	logFile := name + ".log"
 	startedPid, err := y.procMgr.Start(name, cmd, logFile)
@@ -193,8 +195,10 @@ func (y *YARNService) startNodeManager() (bool, error) {
 	}
 
 	// Start the NodeManager
-	cmd := exec.Command("yarn", "nodemanager")
-	cmd.Env = y.env.Export()
+	cmd, err := env.Command("yarn", []string{"nodemanager"}, y.env.Export())
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve NodeManager command: %w", err)
+	}
 
 	logFile := name + ".log"
 	startedPid, err := y.procMgr.Start(name, cmd, logFile)
