@@ -63,16 +63,29 @@ func NewYARNService(paths *config.Paths) (*YARNService, error) {
 	return newYARNServiceWithEnv(paths, environment)
 }
 
+// NewYARNObservationService builds a service manager for status and shutdown
+// using only the owned runtime PID and log paths. Startup configuration and
+// executable discovery are intentionally excluded from this path.
+func NewYARNObservationService(paths *config.Paths) (*YARNService, error) {
+	return newYARNService(paths, nil, false)
+}
+
 // newYARNServiceWithEnv builds a YARN service manager from an already-computed
 // environment. Exposed so unit tests can inject a deterministic environment
 // without depending on Hadoop/Hive discovery being available on the host.
 func newYARNServiceWithEnv(paths *config.Paths, environment *env.Environment) (*YARNService, error) {
+	return newYARNService(paths, environment, true)
+}
+
+func newYARNService(paths *config.Paths, environment *env.Environment, createStateDirs bool) (*YARNService, error) {
 	stateDir := filepath.Join(paths.StateDir(), "yarn")
 	pidDir := filepath.Join(stateDir, "pids")
 	logDir := filepath.Join(stateDir, "logs")
 
-	if err := util.MkdirAll(pidDir, logDir); err != nil {
-		return nil, fmt.Errorf("failed to create YARN directories: %w", err)
+	if createStateDirs {
+		if err := util.MkdirAll(pidDir, logDir); err != nil {
+			return nil, fmt.Errorf("failed to create YARN directories: %w", err)
+		}
 	}
 
 	procMgr := &service.ProcessManager{

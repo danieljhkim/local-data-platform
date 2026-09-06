@@ -52,6 +52,42 @@ func newTestHiveService(t *testing.T, paths *config.Paths) *HiveService {
 	return service
 }
 
+func TestNewHiveObservationServiceReportsMissingListenersButKeepsPIDStatus(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "missing-runtime")
+	paths := config.NewPaths(t.TempDir(), baseDir)
+
+	observed, err := NewHiveObservationService(paths)
+	if err != nil {
+		t.Fatalf("NewHiveObservationService() error = %v", err)
+	}
+	if observed.env != nil {
+		t.Fatal("observation service unexpectedly computed a startup environment")
+	}
+	if _, err := os.Stat(paths.HivePaths().PidsDir); !os.IsNotExist(err) {
+		t.Fatalf("observation service created PID directory: %v", err)
+	}
+	if err := os.MkdirAll(observed.procMgr.PidDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(observed.procMgr.PidDir, "metastore.pid"), []byte("42"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	observed.procMgr.CheckRunning = func(pid int) (bool, error) { return pid == 42, nil }
+
+	statuses, err := observed.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if len(statuses) != 2 || !statuses[0].Running || statuses[0].PID != 42 {
+		t.Fatalf("PID observation = %#v, want metastore pid 42 despite missing listener settings", statuses)
+	}
+	for _, listener := range observed.ListenerStatuses() {
+		if listener.ProbeError == nil || !strings.Contains(listener.ProbeError.Error(), "listener settings unavailable") {
+			t.Fatalf("listener observation = %#v, want explicit missing-settings error", listener)
+		}
+	}
+}
+
 func newTestHiveServiceWithConfig(t *testing.T, props ...util.HadoopProperty) *HiveService {
 	t.Helper()
 

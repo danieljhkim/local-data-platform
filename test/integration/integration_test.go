@@ -166,6 +166,48 @@ func TestHermeticLifecycleAndWrappers(t *testing.T) {
 	}
 }
 
+func TestStatusAndStopUseRuntimeStateWhenStartupConfigDisappears(t *testing.T) {
+	s := newSandbox(t)
+	s.initialize(true)
+	s.mustRun(nil, "profile", "set", "hdfs")
+	s.mustRun(nil, "start")
+	daemons := daemonPIDs(s.records())
+	if len(daemons) == 0 {
+		t.Fatal("start did not record any sandbox-owned daemon PIDs")
+	}
+
+	if err := os.RemoveAll(filepath.Join(s.baseDir, "conf", "profiles")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.baseDir, "conf", "current", "hive", "hive-site.xml")); err != nil {
+		t.Fatal(err)
+	}
+	s.env = withoutEnv(s.env, "HIVE_HOME")
+
+	statusOutput, statusErr := s.run(nil, "status")
+	if statusErr == nil {
+		t.Fatalf("status unexpectedly reported complete observation without listener settings:\n%s", statusOutput)
+	}
+	for _, process := range []string{"namenode", "datanode", "resourcemanager", "nodemanager", "metastore", "hiveserver2"} {
+		if !strings.Contains(statusOutput, process) {
+			t.Fatalf("status lost %s process observation after startup config disappeared:\n%s", process, statusOutput)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.baseDir, "conf", "current", "hive", "hive-site.xml")); !os.IsNotExist(err) {
+		t.Fatalf("status republished removed Hive configuration: %v", err)
+	}
+
+	if output, err := s.run(nil, "stop"); err != nil {
+		t.Fatalf("stop failed after startup configuration disappeared: %v\n%s", err, output)
+	}
+	for _, pid := range daemons {
+		waitForPIDExit(t, pid, 5*time.Second)
+	}
+	if _, err := os.Stat(filepath.Join(s.baseDir, "conf", "current", "hive", "hive-site.xml")); !os.IsNotExist(err) {
+		t.Fatalf("stop republished removed Hive configuration: %v", err)
+	}
+}
+
 func TestEnvExecAndWrapperPreserveChildExitCodesAndStreams(t *testing.T) {
 	s := newSandbox(t)
 	s.initialize(false)
@@ -419,6 +461,17 @@ func isolatedEnv(overrides map[string]string) []string {
 	}
 	for key, value := range overrides {
 		result = append(result, key+"="+value)
+	}
+	return result
+}
+
+func withoutEnv(environment []string, key string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
 	}
 	return result
 }

@@ -35,11 +35,19 @@ func NewHDFSService(paths *config.Paths) (*HDFSService, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newHDFSService(paths, environment), nil
+}
 
-	// Get HDFS paths
+// NewHDFSObservationService builds a service manager for status and shutdown
+// from stable state paths only. It deliberately does not compute an execution
+// environment, because doing so republishes the active configuration overlay
+// and requires installed startup dependencies that observation does not need.
+func NewHDFSObservationService(paths *config.Paths) (*HDFSService, error) {
+	return newHDFSService(paths, nil), nil
+}
+
+func newHDFSService(paths *config.Paths, environment *env.Environment) *HDFSService {
 	hdfsPaths := paths.HDFSPaths()
-
-	// Create process manager
 	procMgr := service.NewProcessManager(hdfsPaths.PidsDir, hdfsPaths.LogsDir)
 	procMgr.ValidatePID = hdfsPIDValidator()
 
@@ -47,7 +55,7 @@ func NewHDFSService(paths *config.Paths) (*HDFSService, error) {
 		paths:   paths,
 		env:     environment,
 		procMgr: procMgr,
-	}, nil
+	}
 }
 
 // Start starts the HDFS NameNode and DataNode

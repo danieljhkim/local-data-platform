@@ -45,6 +45,22 @@ func newTestYARNService(t *testing.T, paths *config.Paths) *YARNService {
 	return service
 }
 
+func TestNewYARNObservationServiceAvoidsStartupEnvironmentAndWrites(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "missing-runtime")
+	paths := config.NewPaths(t.TempDir(), baseDir)
+
+	observed, err := NewYARNObservationService(paths)
+	if err != nil {
+		t.Fatalf("NewYARNObservationService() error = %v", err)
+	}
+	if observed.env != nil {
+		t.Fatal("observation service unexpectedly computed a startup environment")
+	}
+	if _, err := os.Stat(paths.YARNPaths().PidsDir); !os.IsNotExist(err) {
+		t.Fatalf("observation service created PID directory: %v", err)
+	}
+}
+
 func TestNewYARNService(t *testing.T) {
 	tmpDir := t.TempDir()
 	baseDir := filepath.Join(tmpDir, "base")
