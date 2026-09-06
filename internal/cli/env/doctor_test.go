@@ -3,10 +3,19 @@ package env
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	envpkg "github.com/danieljhkim/local-data-platform/internal/env"
 )
+
+var errDoctorWriter = errors.New("writer unavailable")
+
+type failingDoctorWriter struct{}
+
+func (failingDoctorWriter) Write([]byte) (int, error) {
+	return 0, errDoctorWriter
+}
 
 func TestDoctorJSONWritesOneDocumentAndPreservesExitSemantics(t *testing.T) {
 	tests := []struct {
@@ -74,5 +83,17 @@ func TestDoctorHumanOutputUsesCommandWriter(t *testing.T) {
 	}
 	if got := stdout.String(); got == "" || bytes.Contains(stdout.Bytes(), []byte("schema_version")) {
 		t.Fatalf("human output = %q", got)
+	}
+}
+
+func TestDoctorHumanOutputReturnsWriteError(t *testing.T) {
+	result := &envpkg.DoctorResult{Checks: []envpkg.DoctorCheck{{Command: "java", Required: true, Found: true}}}
+	cmd := newDoctorCmdWithRunner(nil, func(string) *envpkg.DoctorResult { return result })
+	cmd.SetOut(failingDoctorWriter{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	err := cmd.Execute()
+	if !errors.Is(err, errDoctorWriter) {
+		t.Fatalf("Execute() error = %v, want output write error", err)
 	}
 }

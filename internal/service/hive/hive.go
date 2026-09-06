@@ -55,7 +55,7 @@ func NewHiveObservationService(paths *config.Paths) (*HiveService, error) {
 		return nil, err
 	}
 	if _, err := os.Stat(filepath.Join(paths.CurrentHiveConf(), "hive-site.xml")); err != nil {
-		service.listenerSettingsErr = fmt.Errorf("Hive listener settings unavailable: %w", err)
+		service.listenerSettingsErr = fmt.Errorf("hive listener settings unavailable: %w", err)
 	}
 	return service, nil
 }
@@ -415,12 +415,6 @@ func extractDerbyDBPath(dbURL string) string {
 	return ""
 }
 
-// waitForHiveServer2 polls the HiveServer2 thrift port until it is accepting
-// connections or a timeout is reached.
-func (h *HiveService) waitForHiveServer2() error {
-	return h.waitForHiveServer2Step(context.Background())
-}
-
 func (h *HiveService) waitForListener(ctx context.Context, label, processName string, port int) error {
 	addr := fmt.Sprintf("localhost:%d", port)
 	util.Log("Waiting for %s to be ready on port %d...", label, port)
@@ -470,10 +464,4 @@ func waitForContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-// getHS2Port reads the HiveServer2 thrift port from the active hive-site.xml.
-// Falls back to 10000 if not configured.
-func (h *HiveService) getHS2Port() int {
-	return h.listenerPorts().HiveServer2
 }

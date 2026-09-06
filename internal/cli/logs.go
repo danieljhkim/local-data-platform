@@ -121,7 +121,9 @@ Examples:
 				return err
 			}
 
-			renderLogsReport(cmd.OutOrStdout(), report)
+			if err := renderLogsReport(cmd.OutOrStdout(), report); err != nil {
+				return fmt.Errorf("render log report: %w", err)
+			}
 
 			if len(report.Errors) > 0 {
 				return fmt.Errorf("failed to read %d log file(s): %s", len(report.Errors), strings.Join(report.Errors, "; "))
@@ -186,32 +188,47 @@ func collectLogs(paths *config.Paths, profile, target string, lines int) (logsRe
 // renderLogsReport prints a collected report with deterministic per-file
 // source labels, mirroring the multi-file "==> path <==" convention of
 // coreutils tail.
-func renderLogsReport(w io.Writer, report logsReport) {
+func renderLogsReport(w io.Writer, report logsReport) error {
 	first := true
 	for _, svc := range report.Services {
 		for _, f := range svc.Files {
 			if !first {
-				fmt.Fprintln(w)
+				if _, err := fmt.Fprintln(w); err != nil {
+					return err
+				}
 			}
 			first = false
 
-			fmt.Fprintf(w, "==> %s <==\n", f.Path)
+			if _, err := fmt.Fprintf(w, "==> %s <==\n", f.Path); err != nil {
+				return err
+			}
 			switch {
 			case f.Error != "":
-				fmt.Fprintf(w, "(error reading log file: %s)\n", f.Error)
+				if _, err := fmt.Fprintf(w, "(error reading log file: %s)\n", f.Error); err != nil {
+					return err
+				}
 			case f.Missing:
-				fmt.Fprintln(w, "(missing)")
+				if _, err := fmt.Fprintln(w, "(missing)"); err != nil {
+					return err
+				}
 			case report.Lines == 0:
-				fmt.Fprintln(w, "(0 lines requested; file exists)")
+				if _, err := fmt.Fprintln(w, "(0 lines requested; file exists)"); err != nil {
+					return err
+				}
 			case len(f.Lines) == 0:
-				fmt.Fprintln(w, "(empty)")
+				if _, err := fmt.Fprintln(w, "(empty)"); err != nil {
+					return err
+				}
 			default:
 				for _, line := range f.Lines {
-					fmt.Fprintln(w, line)
+					if _, err := fmt.Fprintln(w, line); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
+	return nil
 }
 
 // tailFile returns up to n trailing lines of path. A missing file is
@@ -225,7 +242,13 @@ func tailFile(path string, n int) (lines []string, missing bool, err error) {
 		}
 		return nil, false, err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			lines = nil
+			missing = false
+			err = closeErr
+		}
+	}()
 
 	info, statErr := f.Stat()
 	if statErr == nil && info.IsDir() {

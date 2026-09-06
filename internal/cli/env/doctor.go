@@ -42,7 +42,9 @@ Examples:
 					return err
 				}
 			} else {
-				result.PrintTo(cmd.OutOrStdout())
+				if err := result.PrintTo(cmd.OutOrStdout()); err != nil {
+					return err
+				}
 			}
 			if result.ExitCode() != 0 {
 				return fmt.Errorf("required dependencies are missing")

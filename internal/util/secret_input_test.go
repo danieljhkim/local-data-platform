@@ -42,7 +42,11 @@ func TestReadSecret_TTYUsesEchoOffReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if closeErr := f.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
 
 	origIs := isTerminalFn
 	origRead := readTTYPasswordFn
