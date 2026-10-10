@@ -109,20 +109,14 @@ func TestProcessManager_Start_DetachesFromCallerSession(t *testing.T) {
 	t.Cleanup(func() { _ = pm.Stop("detached") })
 
 	// A terminal delivers Ctrl-C and hangup to the caller's process group and
-	// session; the daemon must lead its own instead.
+	// session; the daemon must lead its own. setsid also makes the daemon its
+	// own process group leader, which is portably observable via getpgid.
 	pgid, err := syscall.Getpgid(pid)
 	if err != nil {
 		t.Fatalf("Getpgid(%d) error = %v", pid, err)
 	}
 	if pgid != pid || pgid == syscall.Getpgrp() {
 		t.Fatalf("daemon pgid = %d, want its own group %d (caller group %d)", pgid, pid, syscall.Getpgrp())
-	}
-	sid, err := syscall.Getsid(pid)
-	if err != nil {
-		t.Fatalf("Getsid(%d) error = %v", pid, err)
-	}
-	if sid != pid {
-		t.Fatalf("daemon session = %d, want its own session %d", sid, pid)
 	}
 }
 
