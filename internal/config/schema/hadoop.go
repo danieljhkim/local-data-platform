@@ -75,7 +75,13 @@ type HDFSSiteConfig struct {
 	DataNodeDataDir     string // dfs.datanode.data.dir (templated)
 	NameNodeHTTPAddress string // dfs.namenode.http-address
 	DataNodeHTTPAddress string // dfs.datanode.http.address
-	Extra               []Property
+	// DataNodeDataTransferAddress is dfs.datanode.address. Hadoop 3.5.0
+	// defaults it to 0.0.0.0:9866, so the profile must set a loopback host.
+	DataNodeDataTransferAddress string
+	// DataNodeIPCAddress is dfs.datanode.ipc.address. Hadoop 3.5.0 defaults
+	// it to 0.0.0.0:9867, so the profile must set a loopback host.
+	DataNodeIPCAddress string
+	Extra              []Property
 }
 
 // Clone creates a deep copy
@@ -97,8 +103,12 @@ func (c *HDFSSiteConfig) ToProperties(ctx *TemplateContext) []Property {
 		{Name: "dfs.datanode.data.dir", Value: ctx.Substitute(c.DataNodeDataDir)},
 		{Name: "dfs.namenode.http-address", Value: c.NameNodeHTTPAddress},
 		{Name: "dfs.datanode.http.address", Value: c.DataNodeHTTPAddress},
+		{Name: "dfs.datanode.address", Value: c.DataNodeDataTransferAddress},
+		{Name: "dfs.datanode.ipc.address", Value: c.DataNodeIPCAddress},
 	}
-	return appendExtraProperties(props, c.Extra, ctx)
+	// Replace a typed name in place. appendExtraProperties would emit a
+	// second element, and this repository's XML reader keeps the first.
+	return applyExtraOverrides(props, c.Extra, ctx)
 }
 
 // YarnSiteConfig represents yarn-site.xml properties

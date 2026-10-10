@@ -73,6 +73,27 @@ func TestLoadOverridesRejectsMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestMergeOverrides_DataNodeProtocolAddressOverrideReplacesLoopback(t *testing.T) {
+	baseDir := writeOverrides(t, `profiles:
+  hdfs:
+    hadoop:
+      hdfs-site:
+        dfs.datanode.address: 192.0.2.20:19866
+        dfs.datanode.ipc.address: 192.0.2.21:19867
+`)
+	destDir := t.TempDir()
+	if err := NewConfigGenerator().Generate("hdfs", baseDir, destDir); err != nil {
+		t.Fatalf("Generate(hdfs) failed: %v", err)
+	}
+
+	hdfsSite := filepath.Join(destDir, "hadoop", "hdfs-site.xml")
+	assertSingleProperty(t, hdfsSite, "dfs.datanode.address", "192.0.2.20:19866")
+	assertSingleProperty(t, hdfsSite, "dfs.datanode.ipc.address", "192.0.2.21:19867")
+	assertSingleProperty(t, hdfsSite, "dfs.namenode.rpc-address", nameNodeRPCAddress)
+	assertSingleProperty(t, hdfsSite, "dfs.namenode.http-address", nameNodeHTTPAddress)
+	assertSingleProperty(t, hdfsSite, "dfs.datanode.http.address", dataNodeHTTPAddress)
+}
+
 func TestMergeOverridesConvertsScalarsToPropertyStrings(t *testing.T) {
 	baseDir := writeOverrides(t, `profiles:
   local:
