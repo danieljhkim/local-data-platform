@@ -117,10 +117,21 @@ still requires explicit confirmation when the database is absent.
 
 For hive and spark to work with the postgres metastore, we need to ensure the Postgres JDBC jar is available.
 
+When no compatible driver is already available, use pgJDBC 42.7.14, the current
+upstream release as of October 7, 2026. Its [security release notes](https://jdbc.postgresql.org/changelogs/2026-10-07-42.7.14-release/)
+cover fixes for authentication enforcement and data disclosure. Earlier
+channel-binding issues CVE-2025-49146 (42.7.4 through 42.7.6) and
+CVE-2026-54291 (42.7.4 through 42.7.11) apply only when a connection sets
+`channelBinding=require`; the default is `prefer`. See the [CVE-2025-49146 advisory](https://github.com/pgjdbc/pgjdbc/security/advisories/GHSA-hq9p-pm7w-8p54)
+and [pgJDBC security page](https://jdbc.postgresql.org/security/). The default
+local/Derby setup does not use the PostgreSQL JDBC driver. LDP does not bundle
+or download the JAR automatically, and compatible user-provided JARs remain
+accepted.
+
 ### what to do:
 
 - check if the jar is available in $HIVE_HOME/lib
 - if not, download the jar from Maven Central and place it in `$HIVE_HOME/lib` or `$BASE_DIR/lib/jars/`
-  - i.e. `https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar`
+  - i.e. `https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.14/postgresql-42.7.14.jar`
 
 Once the jar is available, just run `local-data start` to start the services and you're good to go. Schema will be initialized automatically. And the jar will be added to spark as well.

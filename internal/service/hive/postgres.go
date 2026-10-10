@@ -12,7 +12,7 @@ import (
 
 const (
 	// DefaultPostgresJDBCVersion is used only to construct a helpful download URL (we do NOT enforce an exact version).
-	DefaultPostgresJDBCVersion = "42.7.4"
+	DefaultPostgresJDBCVersion = "42.7.14"
 )
 
 // EnsurePostgresJDBCDriver ensures the Postgres JDBC driver is available
