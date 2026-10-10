@@ -273,7 +273,7 @@ func followLogStates(ctx context.Context, w io.Writer, states []followedLog, int
 // pollFollowedLog writes at most followReadBlockSize newly available bytes.
 // The size snapshot prevents a continuously appending file from turning one
 // poll into unbounded work. A later poll drains the remaining bytes.
-func pollFollowedLog(w io.Writer, state *followedLog) error {
+func pollFollowedLog(w io.Writer, state *followedLog) (err error) {
 	info, err := os.Stat(state.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -307,7 +307,11 @@ func pollFollowedLog(w io.Writer, state *followedLog) error {
 		}
 		return fmt.Errorf("open %s: %w", state.path, err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 	openedInfo, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("stat opened %s: %w", state.path, err)
