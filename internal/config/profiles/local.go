@@ -11,18 +11,20 @@ func LocalProfile() *Profile {
 		ConfigSet: &schema.ConfigSet{
 			Hadoop: nil, // No Hadoop config for local profile
 			Hive: &schema.HiveConfig{
-				ConnectionURL:        "jdbc:derby:;databaseName=metastore_db;create=true",
-				ConnectionDriverName: "org.apache.derby.iapi.jdbc.AutoloadedDriver",
-				ConnectionUserName:   "APP",
-				ConnectionPassword:   "", // Derby's embedded "APP" user ignores this; overridden for postgres/mysql via `local-data init`.
-				MetastoreURIs:        "thrift://localhost:9083",
-				WarehouseDir:         "file:{{BASE_DIR}}/state/hive/warehouse", // Local filesystem
-				TransportMode:        "binary",
-				ThriftPort:           10000,
-				Authentication:       "NONE",
-				EnableDoAs:           false,
-				WebUIHost:            "127.0.0.1",
-				WebUIPort:            10002,
+				ConnectionURL:           "jdbc:derby:;databaseName=metastore_db;create=true",
+				ConnectionDriverName:    "org.apache.derby.iapi.jdbc.AutoloadedDriver",
+				ConnectionUserName:      "APP",
+				ConnectionPassword:      "", // Derby's embedded "APP" user ignores this; overridden for postgres/mysql via `local-data init`.
+				MetastoreURIs:           "thrift://localhost:9083",
+				MetastoreThriftBindHost: "127.0.0.1",
+				WarehouseDir:            "file:{{BASE_DIR}}/state/hive/warehouse", // Local filesystem
+				TransportMode:           "binary",
+				ThriftPort:              10000,
+				ThriftBindHost:          "127.0.0.1",
+				Authentication:          "NONE",
+				EnableDoAs:              false,
+				WebUIHost:               "127.0.0.1",
+				WebUIPort:               10002,
 				Extra: []schema.Property{
 					{Name: "hive.metastore.event.db.notification.api.auth", Value: "false"},
 					{Name: "hive.execution.engine", Value: "mr"},
