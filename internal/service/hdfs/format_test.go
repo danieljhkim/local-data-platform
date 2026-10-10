@@ -1,10 +1,13 @@
 package hdfs
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -40,7 +43,7 @@ func writeValidNameNodeVersion(t *testing.T, dir, storageID, clusterID string) {
 	writeFormatTestFile(t, filepath.Join(versionDir, "VERSION"), []byte("storageType=NAME_NODE\nlayoutVersion=-63\nnamespaceID=12345\ncTime=1700000000000\nclusterID="+clusterID+"\nstorageID="+storageID+"\n"))
 }
 
-func replaceFormatFunctions(t *testing.T, find func() (int, error), format func(string, []string) error) {
+func replaceFormatFunctions(t *testing.T, find func() (int, error), format func(context.Context, string, []string) error) {
 	t.Helper()
 	originalFind := findNameNodePIDForFormat
 	originalFormat := formatNameNodeForFormat
@@ -223,7 +226,7 @@ func TestEnsureNameNodeFormatted_AllConfiguredDirectoriesFormatted(t *testing.T)
 	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err != nil {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v", err)
@@ -243,7 +246,7 @@ func TestEnsureNameNodeFormatted_InconsistentFormattedDirectoriesFailClosed(t *t
 	writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 	writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-two")
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err == nil || !strings.Contains(err.Error(), "identity differs") {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v, want identity mismatch error", err)
@@ -263,7 +266,7 @@ func TestEnsureNameNodeFormatted_AllEmptyDirectoriesFormatsOnceAndVerifiesAll(t 
 	mkdirFormatTestDir(t, dirOne)
 	mkdirFormatTestDir(t, dirTwo)
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error {
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error {
 		formatCalls++
 		writeValidNameNodeVersion(t, dirOne, "storage-one", "cluster-one")
 		writeValidNameNodeVersion(t, dirTwo, "storage-two", "cluster-one")
@@ -292,7 +295,7 @@ func TestEnsureNameNodeFormatted_MixedStorageFailsWithoutFormatting(t *testing.T
 				writeFormatTestFile(t, filepath.Join(dirTwo, "unrelated"), []byte("data"))
 			}
 			formatCalls := 0
-			replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
+			replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
 			err := EnsureNameNodeFormatted(confDir)
 			if err == nil {
 				t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
@@ -316,7 +319,7 @@ func TestEnsureNameNodeFormatted_NonEmptyAndInvalidVersionFailClosed(t *testing.
 	mkdirFormatTestDir(t, filepath.Join(dirTwo, "current"))
 	writeFormatTestFile(t, filepath.Join(dirTwo, "current", "VERSION"), []byte("not a Hadoop VERSION file"))
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(string, []string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
 	if err := EnsureNameNodeFormatted(confDir); err == nil {
 		t.Fatal("EnsureNameNodeFormatted() error = nil, want fail-closed error")
 	}
@@ -333,12 +336,106 @@ func TestEnsureNameNodeFormatted_RunningNameNodePreventsFormatting(t *testing.T)
 	dirTwo := filepath.Join(tmpDir, "namenode-two")
 	writeNameNodeConfig(t, confDir, dirOne, dirTwo)
 	formatCalls := 0
-	replaceFormatFunctions(t, func() (int, error) { return 4242, nil }, func(string, []string) error { formatCalls++; return nil })
+	replaceFormatFunctions(t, func() (int, error) { return 4242, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
 	err := EnsureNameNodeFormatted(confDir)
 	if err == nil || !strings.Contains(err.Error(), "4242") || !strings.Contains(err.Error(), dirOne) || !strings.Contains(err.Error(), dirTwo) {
 		t.Fatalf("EnsureNameNodeFormatted() error = %v, want PID and storage paths", err)
 	}
 	if formatCalls != 0 {
 		t.Fatalf("format calls = %d, want 0", formatCalls)
+	}
+}
+
+func TestEnsureNameNodeFormattedContext_CanceledBeforeFormatDoesNotFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	confDir := filepath.Join(tmpDir, "conf")
+	mkdirFormatTestDir(t, confDir)
+	dir := filepath.Join(tmpDir, "namenode")
+	mkdirFormatTestDir(t, dir)
+	writeNameNodeConfig(t, confDir, dir)
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := EnsureNameNodeFormattedContext(ctx, confDir, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EnsureNameNodeFormattedContext() error = %v, want context.Canceled", err)
+	}
+	if formatCalls != 0 {
+		t.Fatalf("format calls = %d, want 0", formatCalls)
+	}
+}
+
+func TestEnsureNameNodeFormattedContext_InterruptedFormatIsNotVerifiedOrRetried(t *testing.T) {
+	tmpDir := t.TempDir()
+	confDir := filepath.Join(tmpDir, "conf")
+	mkdirFormatTestDir(t, confDir)
+	dir := filepath.Join(tmpDir, "namenode")
+	mkdirFormatTestDir(t, dir)
+	writeNameNodeConfig(t, confDir, dir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(ctx context.Context, _ string, _ []string) error {
+		formatCalls++
+		cancel()
+		return errors.New("signal: terminated")
+	})
+
+	err := EnsureNameNodeFormattedContext(ctx, confDir, nil)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "partially written") {
+		t.Fatalf("EnsureNameNodeFormattedContext() error = %v, want interrupted format with context.Canceled", err)
+	}
+	if formatCalls != 1 {
+		t.Fatalf("format calls = %d, want 1", formatCalls)
+	}
+}
+
+func TestEnsureNameNodeFormattedContext_CancellationDoesNotBypassNonEmptyStorageCheck(t *testing.T) {
+	tmpDir := t.TempDir()
+	confDir := filepath.Join(tmpDir, "conf")
+	mkdirFormatTestDir(t, confDir)
+	dir := filepath.Join(tmpDir, "namenode")
+	mkdirFormatTestDir(t, dir)
+	writeFormatTestFile(t, filepath.Join(dir, "stray"), []byte("data"))
+	writeNameNodeConfig(t, confDir, dir)
+	formatCalls := 0
+	replaceFormatFunctions(t, func() (int, error) { return 0, nil }, func(context.Context, string, []string) error { formatCalls++; return nil })
+
+	err := EnsureNameNodeFormattedContext(context.Background(), confDir, nil)
+	if err == nil || !strings.Contains(err.Error(), "not formatted") || formatCalls != 0 {
+		t.Fatalf("EnsureNameNodeFormattedContext() = %v (format calls %d), want refusal to format non-empty storage", err, formatCalls)
+	}
+}
+
+func TestCreateCommonHDFSDirsContext_CancellationStopsCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	started := filepath.Join(tmpDir, "started")
+	writeFormatTestFile(t, filepath.Join(tmpDir, "hdfs"), []byte("#!/bin/sh\n: > \""+started+"\"\nsleep 30\n"))
+	if err := os.Chmod(filepath.Join(tmpDir, "hdfs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tmpDir+":/bin:/usr/bin")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- CreateCommonHDFSDirsContext(ctx, "testuser", withHadoopConfDir(os.Environ(), tmpDir)) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateCommonHDFSDirsContext() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CreateCommonHDFSDirsContext() did not return after cancellation")
 	}
 }

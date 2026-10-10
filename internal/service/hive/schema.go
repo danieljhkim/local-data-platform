@@ -2,6 +2,7 @@ package hive
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -20,9 +21,11 @@ const (
 )
 
 // checkMetastoreSchema checks if the Hive metastore schema is initialized
-// Returns SchemaInitialized if schema exists, SchemaNotInitialized if not, SchemaUnknown on error
-func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatus, error) {
-	cmd, err := env.Command("schematool", []string{"-dbType", string(dbType), "-info"}, h.env.Export())
+// Returns SchemaInitialized if schema exists, SchemaNotInitialized if not, SchemaUnknown on error.
+// A canceled ctx stops schematool and is returned as ctx.Err() rather than being
+// interpreted as a schema status.
+func (h *HiveService) checkMetastoreSchema(ctx context.Context, dbType metastore.DBType) (SchemaStatus, error) {
+	cmd, err := env.CommandContext(ctx, "schematool", []string{"-dbType", string(dbType), "-info"}, h.env.Export())
 	if err != nil {
 		return SchemaUnknown, err
 	}
@@ -32,6 +35,9 @@ func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatu
 	cmd.Stderr = &stderr
 
 	err = cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return SchemaUnknown, ctxErr
+	}
 	output := stdout.String() + stderr.String()
 
 	// schematool -info returns non-zero if schema is not initialized
@@ -67,11 +73,12 @@ func (h *HiveService) checkMetastoreSchema(dbType metastore.DBType) (SchemaStatu
 	return SchemaInitialized, nil
 }
 
-// initMetastoreSchema initializes the Hive metastore schema
-func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
+// initMetastoreSchema initializes the Hive metastore schema. A canceled ctx
+// stops schematool and is returned as ctx.Err().
+func (h *HiveService) initMetastoreSchema(ctx context.Context, dbType metastore.DBType) error {
 	util.Log("Initializing Hive metastore schema...")
 
-	cmd, err := env.Command("schematool", []string{"-dbType", string(dbType), "-initSchema"}, h.env.Export())
+	cmd, err := env.CommandContext(ctx, "schematool", []string{"-dbType", string(dbType), "-initSchema"}, h.env.Export())
 	if err != nil {
 		return err
 	}
@@ -81,6 +88,9 @@ func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
 	cmd.Stderr = &stderr
 
 	err = cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	output := stdout.String() + stderr.String()
 
 	if err != nil {
@@ -99,19 +109,28 @@ func (h *HiveService) initMetastoreSchema(dbType metastore.DBType) error {
 	return nil
 }
 
-func (h *HiveService) ensureMetastoreSchema() error {
+func (h *HiveService) ensureMetastoreSchema(ctx context.Context) error {
 	dbType, _, err := h.detectMetastoreConfig()
 	if err != nil {
 		return err
 	}
-	return h.ensureMetastoreSchemaForType(dbType, false)
+	return h.ensureMetastoreSchemaForType(ctx, dbType, false)
 }
 
-func (h *HiveService) ensureMetastoreSchemaForType(dbType metastore.DBType, strict bool) error {
+// ensureMetastoreSchemaForType checks and, when needed, initializes the
+// metastore schema. Cancellation is always fatal: the non-strict path only
+// downgrades schematool failures, never an abandoned start.
+func (h *HiveService) ensureMetastoreSchemaForType(ctx context.Context, dbType metastore.DBType, strict bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	util.Log("Checking Hive metastore schema...")
 
-	status, err := h.checkMetastoreSchema(dbType)
+	status, err := h.checkMetastoreSchema(ctx, dbType)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if strict {
 			return err
 		}
@@ -127,7 +146,10 @@ func (h *HiveService) ensureMetastoreSchemaForType(dbType metastore.DBType, stri
 
 	case SchemaNotInitialized:
 		util.Log("Metastore schema not found, initializing...")
-		if err := h.initMetastoreSchema(dbType); err != nil {
+		if err := h.initMetastoreSchema(ctx, dbType); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if strict {
 				return err
 			}
@@ -147,5 +169,5 @@ func (h *HiveService) ensureMetastoreSchemaForType(dbType metastore.DBType, stri
 }
 
 func (h *HiveService) ensureMetastoreSchemaStrict(dbType metastore.DBType) error {
-	return h.ensureMetastoreSchemaForType(dbType, true)
+	return h.ensureMetastoreSchemaForType(context.Background(), dbType, true)
 }

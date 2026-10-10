@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/danieljhkim/local-data-platform/internal/config"
 )
@@ -119,10 +120,25 @@ func ExitCode(err error) int {
 // Cmd.Env is applied, so calling exec.Command directly would use the parent's
 // PATH instead of the selected runtime installation.
 func Command(name string, args []string, commandEnv []string) (*exec.Cmd, error) {
-	return CommandContext(context.Background(), name, args, commandEnv)
+	path, err := ResolveExecutable(name, commandEnv)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(path, args...)
+	cmd.Env = commandEnv
+	return cmd, nil
 }
 
-// CommandContext is Command with cancellation support.
+// cancelWaitDelay bounds how long a canceled command may ignore SIGTERM, or
+// keep its output pipes open through a surviving descendant, before Wait
+// force-kills it and returns.
+const cancelWaitDelay = 3 * time.Second
+
+// CommandContext is Command with cancellation support. The command runs in its
+// own process group so cancellation reaches the launcher scripts' descendants
+// (for example a java process started by a shell wrapper), not only the direct
+// child. Cancellation sends SIGTERM to that group and, if the command has not
+// exited after cancelWaitDelay, kills it.
 func CommandContext(ctx context.Context, name string, args []string, commandEnv []string) (*exec.Cmd, error) {
 	path, err := ResolveExecutable(name, commandEnv)
 	if err != nil {
@@ -130,6 +146,15 @@ func CommandContext(ctx context.Context, name string, args []string, commandEnv 
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = commandEnv
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Setpgid makes the child its own group leader, so -pid is its group.
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+			return cmd.Process.Signal(syscall.SIGTERM)
+		}
+		return nil
+	}
+	cmd.WaitDelay = cancelWaitDelay
 	return cmd, nil
 }
 

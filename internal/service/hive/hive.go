@@ -113,7 +113,7 @@ func (h *HiveService) StartContext(ctx context.Context) (service.StartResult, er
 	}
 
 	// Ensure metastore schema is initialized
-	if err := h.ensureMetastoreSchema(); err != nil {
+	if err := h.ensureMetastoreSchema(ctx); err != nil {
 		return service.StartResult{}, err
 	}
 
