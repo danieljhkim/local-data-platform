@@ -66,6 +66,9 @@ type logsFile struct {
 	Missing bool
 	Lines   []string
 	Error   string
+	// snapshot identifies the opened file and EOF consumed by the successful
+	// tail attempt, before rendering can block or the path can change.
+	snapshot os.FileInfo
 }
 
 // logsService groups the log files collected for a single service.
@@ -201,8 +204,8 @@ func collectLogs(paths *config.Paths, profile, target string, lines int) (logsRe
 		svc := logsService{Name: name}
 		for _, fileName := range logFilesByService[name] {
 			path := filepath.Join(logDir, fileName)
-			content, missing, readErr := tailFile(path, lines)
-			lf := logsFile{Path: path, Missing: missing, Lines: content}
+			content, missing, snapshot, readErr := tailFile(path, lines)
+			lf := logsFile{Path: path, Missing: missing, Lines: content, snapshot: snapshot}
 			if readErr != nil {
 				lf.Error = readErr.Error()
 				report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", path, readErr))
@@ -232,16 +235,17 @@ func newFollowedLogs(report logsReport) ([]followedLog, error) {
 	for _, svc := range report.Services {
 		for _, f := range svc.Files {
 			state := followedLog{path: f.Path}
-			info, err := os.Stat(f.Path)
-			if err == nil {
+			if !f.Missing {
+				info := f.snapshot
+				if info == nil {
+					return nil, fmt.Errorf("%s has no tail snapshot", f.Path)
+				}
 				if !info.Mode().IsRegular() {
 					return nil, fmt.Errorf("%s is not a regular log file", f.Path)
 				}
 				state.info = info
 				state.offset = info.Size()
 				state.exists = true
-			} else if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("stat %s: %w", f.Path, err)
 			}
 			states = append(states, state)
 		}
@@ -403,41 +407,44 @@ func renderLogsReport(w io.Writer, report logsReport) error {
 
 // tailFile returns up to n trailing lines of path. A missing file is
 // reported via the missing return value rather than an error. n == 0 skips
-// reading file content entirely.
-func tailFile(path string, n int) (lines []string, missing bool, err error) {
+// reading file content entirely. snapshot retains the identity and EOF used by
+// the successful read so follow mode can resume without a second observation.
+func tailFile(path string, n int) (lines []string, missing bool, snapshot os.FileInfo, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, true, nil
+			return nil, true, nil, nil
 		}
-		return nil, false, err
+		return nil, false, nil, err
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil && err == nil {
 			lines = nil
 			missing = false
+			snapshot = nil
 			err = closeErr
 		}
 	}()
 
 	info, statErr := f.Stat()
 	if statErr == nil && info.IsDir() {
-		return nil, false, fmt.Errorf("%s is a directory, not a log file", path)
+		return nil, false, nil, fmt.Errorf("%s is a directory, not a log file", path)
 	}
 
 	if n == 0 {
-		return nil, false, nil
+		return nil, false, info, statErr
 	}
 
 	if statErr == nil && info.Mode().IsRegular() {
-		lines, err = tailRegularFile(f, n)
+		lines, snapshot, err = tailRegularFileSnapshot(f, n)
 	} else {
 		lines, err = tailLines(f, n)
+		snapshot = info
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
-	return lines, false, nil
+	return lines, false, snapshot, nil
 }
 
 // tailRegularFile returns the last n lines of a regular file by reading
@@ -456,30 +463,37 @@ func tailFile(path string, n int) (lines []string, missing bool, err error) {
 // maxLogLineBytes. Longer suffix lines fail this file. An oversized line
 // older than the suffix is never scanned once N line starts are found.
 func tailRegularFile(f seekStatReader, n int) ([]string, error) {
+	lines, _, err := tailRegularFileSnapshot(f, n)
+	return lines, err
+}
+
+// tailRegularFileSnapshot retains the snapshot of the successful attempt,
+// including a fresh EOF when a concurrent truncate required a retry.
+func tailRegularFileSnapshot(f seekStatReader, n int) ([]string, os.FileInfo, error) {
 	if n <= 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for attempt := 0; attempt <= maxTailTruncateRetries; attempt++ {
-		lines, retry, err := tailRegularFileOnce(f, n)
+		lines, snapshot, retry, err := tailRegularFileOnce(f, n)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if retry {
 			continue
 		}
-		return lines, nil
+		return lines, snapshot, nil
 	}
-	return nil, errTailTruncated
+	return nil, nil, errTailTruncated
 }
 
-func tailRegularFileOnce(f seekStatReader, n int) (lines []string, retry bool, err error) {
+func tailRegularFileOnce(f seekStatReader, n int) (lines []string, snapshot os.FileInfo, retry bool, err error) {
 	info, err := f.Stat()
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	size := info.Size()
 	if size == 0 {
-		return nil, false, nil
+		return nil, info, false, nil
 	}
 
 	var pieces [][]byte
@@ -495,18 +509,18 @@ func tailRegularFileOnce(f seekStatReader, n int) (lines []string, retry bool, e
 		}
 		readAt := pos - chunk
 		if _, err := f.Seek(readAt, io.SeekStart); err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		buf := make([]byte, chunk)
 		got, readErr := io.ReadFull(f, buf)
 		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF || int64(got) != chunk {
-			return nil, true, nil
+			return nil, nil, true, nil
 		}
 		if readErr != nil {
-			return nil, false, readErr
+			return nil, nil, false, readErr
 		}
 		if cur, statErr := f.Stat(); statErr == nil && cur.Size() < size {
-			return nil, true, nil
+			return nil, nil, true, nil
 		}
 
 		scanFrom := len(buf) - 1
@@ -532,7 +546,7 @@ func tailRegularFileOnce(f seekStatReader, n int) (lines []string, retry bool, e
 			}
 			bytesSinceNL++
 			if bytesSinceNL > maxLogLineBytes {
-				return nil, false, fmt.Errorf("log line exceeds %d-byte limit", maxLogLineBytes)
+				return nil, nil, false, fmt.Errorf("log line exceeds %d-byte limit", maxLogLineBytes)
 			}
 		}
 		if found {
@@ -551,7 +565,7 @@ func tailRegularFileOnce(f seekStatReader, n int) (lines []string, retry bool, e
 	for i := len(pieces) - 1; i >= 0; i-- {
 		out = append(out, pieces[i]...)
 	}
-	return splitTailLines(out), false, nil
+	return splitTailLines(out), info, false, nil
 }
 
 func splitTailLines(b []byte) []string {

@@ -459,6 +459,39 @@ func TestFollowLogs_CancellationReturnsPromptly(t *testing.T) {
 	}
 }
 
+func TestFollowLogs_HandoffDrainsInBoundedChunks(t *testing.T) {
+	paths := &config.Paths{BaseDir: t.TempDir()}
+	path := writeLogFixture(t, paths, "hive", "metastore.log", "old\n")
+	report, err := collectLogs(paths, "local", "hive", 0)
+	if err != nil {
+		t.Fatalf("collectLogs: %v", err)
+	}
+	content := strings.Repeat("x", 2*followReadBlockSize+7)
+	appendLog(t, path, content)
+	states, err := newFollowedLogs(report)
+	if err != nil {
+		t.Fatalf("newFollowedLogs: %v", err)
+	}
+	var output bytes.Buffer
+	label := "==> " + path + " <==\n"
+	for _, size := range []int{followReadBlockSize, followReadBlockSize, 7, 0} {
+		before := output.Len()
+		if err := pollFollowedLog(&output, &states[0]); err != nil {
+			t.Fatalf("pollFollowedLog: %v", err)
+		}
+		want := size
+		if size > 0 {
+			want += len(label)
+		}
+		if got := output.Len() - before; got != want {
+			t.Fatalf("poll wrote %d bytes, want %d including source label", got, want)
+		}
+	}
+	if got := strings.ReplaceAll(output.String(), label, ""); got != content {
+		t.Fatal("handoff content was skipped, duplicated, or mixed with old content")
+	}
+}
+
 func TestLogsCmd_FollowRendersInitialSuffixAndHonorsCancellation(t *testing.T) {
 	paths := &config.Paths{BaseDir: t.TempDir()}
 	writeLogFixture(t, paths, "hive", "metastore.log", "discarded\ninitial\n")
@@ -477,6 +510,110 @@ func TestLogsCmd_FollowRendersInitialSuffixAndHonorsCancellation(t *testing.T) {
 	got := output.String()
 	if strings.Contains(got, "discarded") || !strings.Contains(got, "initial") || !strings.Contains(got, "server-initial") {
 		t.Fatalf("initial follow suffix = %q", got)
+	}
+}
+
+// blockedInitialLogsWriter holds the first report write until the test has
+// changed the files. No timing assumption about tail collection or polling is
+// needed to reproduce a slow initial output sink.
+type blockedInitialLogsWriter struct {
+	lockedLogsBuffer
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockedInitialLogsWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.started)
+		<-w.release
+	})
+	return w.lockedLogsBuffer.Write(p)
+}
+
+func TestLogsCmd_FollowHandoffDuringInitialOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial string
+		lines   string
+		change  string
+	}{
+		{"append", "discarded\ninitial\n", "1", "append"},
+		{"zero_lines", "old-content\n", "0", "append"},
+		{"empty", "", "1", "append"},
+		{"missing", "", "1", "create"},
+		{"truncate", strings.Repeat("old-content\n", 20), "1", "truncate"},
+		{"replacement", "old\n", "1", "replace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := &config.Paths{BaseDir: t.TempDir()}
+			var logPaths []string
+			for _, name := range logFilesByService["hive"] {
+				path := filepath.Join(paths.ServiceStateDir("hive").LogsDir, name)
+				if tc.change != "create" {
+					writeLogFixture(t, paths, "hive", name, tc.initial)
+				}
+				logPaths = append(logPaths, path)
+			}
+			output := &blockedInitialLogsWriter{started: make(chan struct{}), release: make(chan struct{})}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var release sync.Once
+			unblock := func() { release.Do(func() { close(output.release) }) }
+			defer unblock()
+			cmd := NewLogsCmd(func() *config.Paths { return paths })
+			cmd.SetOut(output)
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"hive", "--follow", "--lines", tc.lines})
+			done := make(chan error, 1)
+			go func() { done <- cmd.ExecuteContext(ctx) }()
+			select {
+			case <-output.started:
+			case err := <-done:
+				t.Fatalf("command stopped before initial output: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("command did not reach initial output")
+			}
+			var markers []string
+			for i, path := range logPaths {
+				marker := fmt.Sprintf("handoff-marker-%d\n", i)
+				markers = append(markers, marker)
+				switch tc.change {
+				case "append":
+					appendLog(t, path, marker)
+				case "replace":
+					if err := os.Rename(path, path+".1"); err != nil {
+						t.Fatalf("rotate: %v", err)
+					}
+					fallthrough
+				default:
+					writeLogFixture(t, paths, "hive", filepath.Base(path), marker)
+				}
+			}
+			unblock()
+			waitForFollowOutput(t, output.String, markers...)
+			// Force another poll to check that the handoff bytes are not replayed.
+			appendLog(t, logPaths[0], "later-marker\n")
+			waitForFollowOutput(t, output.String, "later-marker\n")
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("follow command: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("follow command did not cancel")
+			}
+			got := output.String()
+			for i, marker := range markers {
+				if strings.Count(got, marker) != 1 || strings.Count(got, "==> "+logPaths[i]+" <==") < 2 {
+					t.Fatalf("expected exactly one labeled handoff marker %q:\n%s", marker, got)
+				}
+			}
+			if strings.Contains(got, "discarded") || (tc.lines == "0" && strings.Contains(got, "old-content")) {
+				t.Fatalf("initial suffix replayed discarded content:\n%s", got)
+			}
+		})
 	}
 }
 
@@ -718,7 +855,7 @@ func TestTailRegularFile_ConcurrentAppendIgnoresGrowthAfterSnapshot(t *testing.T
 		}
 	}
 
-	got, err := tailRegularFile(mf, 2)
+	got, snapshot, err := tailRegularFileSnapshot(mf, 2)
 	if err != nil {
 		t.Fatalf("tailRegularFile: %v", err)
 	}
@@ -728,6 +865,9 @@ func TestTailRegularFile_ConcurrentAppendIgnoresGrowthAfterSnapshot(t *testing.T
 	}
 	if joined != "b,c" {
 		t.Fatalf("lines = %#v, want snapshot suffix [b c]", got)
+	}
+	if snapshot.Size() != int64(len("a\nb\nc\n")) {
+		t.Fatalf("snapshot size = %d, want EOF before concurrent append", snapshot.Size())
 	}
 }
 
@@ -741,12 +881,15 @@ func TestTailRegularFile_ConcurrentTruncateRetriesThenTailsNewSize(t *testing.T)
 		}
 	}
 
-	got, err := tailRegularFile(mf, 2)
+	got, snapshot, err := tailRegularFileSnapshot(mf, 2)
 	if err != nil {
 		t.Fatalf("tailRegularFile after truncate retry: %v", err)
 	}
 	if strings.Join(got, ",") != "l1,l2" {
 		t.Fatalf("lines = %#v, want last 2 of truncated file [l1 l2]", got)
+	}
+	if snapshot.Size() != int64(len(shrunk)) {
+		t.Fatalf("snapshot size = %d, want successful retry's EOF %d", snapshot.Size(), len(shrunk))
 	}
 }
 
@@ -810,7 +953,7 @@ func BenchmarkTailFile_32MiBFile_Last10Lines(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		lines, missing, err := tailFile(path, wantLines)
+		lines, missing, _, err := tailFile(path, wantLines)
 		if err != nil {
 			b.Fatalf("tailFile: %v", err)
 		}
