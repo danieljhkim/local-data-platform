@@ -124,6 +124,9 @@ func (h *HiveService) ensureMetastoreSchemaForType(ctx context.Context, dbType m
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := env.CheckHiveJava(h.env); err != nil {
+		return err
+	}
 	util.Log("Checking Hive metastore schema...")
 
 	status, err := h.checkMetastoreSchema(ctx, dbType)

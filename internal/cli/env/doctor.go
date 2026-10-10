@@ -47,7 +47,7 @@ Examples:
 				}
 			}
 			if result.ExitCode() != 0 {
-				return fmt.Errorf("required dependencies are missing")
+				return fmt.Errorf("required dependencies are missing or incompatible")
 			}
 			return nil
 		},

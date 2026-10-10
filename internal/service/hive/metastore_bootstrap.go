@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/danieljhkim/local-data-platform/internal/env"
 	"github.com/danieljhkim/local-data-platform/internal/metastore"
 	"github.com/danieljhkim/local-data-platform/internal/util"
 )
@@ -26,6 +27,9 @@ type sqlConnInfo struct {
 
 // BootstrapMetastore prepares metastore dependencies and initializes schema.
 func (h *HiveService) BootstrapMetastore(in io.Reader, out, errOut io.Writer) error {
+	if err := env.CheckHiveJava(h.env); err != nil {
+		return err
+	}
 	dbType, dbURL, err := h.detectMetastoreConfig()
 	if err != nil {
 		return err
