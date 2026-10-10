@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- With `JAVA_HOME` unset, `init`, `env doctor`, and the launched tools keep the Homebrew Java 17 default only while the installed Hive can load on it. When Hive needs a newer Java (Homebrew Hive 4.2.1 needs Java 21), the lowest installed Homebrew `openjdk@N` that satisfies it is selected, then the `java` on `PATH`; if none does, the Java 17 default is kept and the Hive Java mismatch error is reported. An explicit `JAVA_HOME` is still never replaced.
+
 ## [0.5.0] - 2026-10-10
 
 ### Changed
