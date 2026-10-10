@@ -4,11 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.1] - 2026-10-09
+
+### Added
+- `status --json` and `env doctor --json` emit versioned machine-readable output (`schema_version` 1); see `docs/JSON_OUTPUT.md`.
+- `profile diff <name>` previews what `profile set` would change, with secrets redacted.
+- `logs` accepts a service name, `--lines`, and `--follow` (streams new output and survives truncation or replacement).
+
+### Changed
+- Postgres and MySQL `init` no longer falls back to a shared default metastore password: supply one, or type `empty` to confirm an intentionally empty password. Derby is unaffected.
+- `env exec` and the tool wrappers exit with the child's exit status (128 plus the signal number when the child is killed).
+- Launched tools resolve through the computed installation `PATH`, and current-directory executables are refused; `env doctor` inspects those same installations.
+- `make install` honours `PREFIX` again.
 
 ### Fixed
-- Pressing Ctrl-C (or sending SIGTERM) during `local-data start` no longer kills the services through the terminal; the CLI rolls back the services that run started and exits 130 (143 for SIGTERM).
-- Started services run in their own session, so Ctrl-C or a hangup aimed at a script or shell that ran `local-data start` no longer stops them.
+- Ctrl-C or SIGTERM during `local-data start` rolls back the services that run started and exits 130 (143 for SIGTERM), instead of the terminal signal killing the services directly.
+- Started services run in their own session, so Ctrl-C or a hangup in the shell or script that ran `local-data start` no longer stops them.
+- The `hive` wrapper connects to the configured HiveServer2 endpoint and launches from one consistent profile snapshot.
+- `status` and `stop` work even when startup configuration discovery fails, and keep shutdown failures and process-ownership checks.
+- `profile set` reapplies the active profile, so it can be used for recovery.
+- Re-running `init` resumes a failed metastore setup without overwriting initialized profiles.
+- `make build` stamps the version into local binaries.
 
 ## [0.4.0] - 2026-08-30
 
