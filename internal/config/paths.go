@@ -38,7 +38,7 @@ func NewPaths(repoRoot, baseDir string) *Paths {
 }
 
 // DefaultBaseDir returns the default base directory
-// Mirrors ld_default_base_dir: ${BASE_DIR:-$HOME/local-data-platform}
+// Resolves to $HOME/local-data-platform; uses the current user's home if HOME is unset.
 func DefaultBaseDir() string {
 	home := os.Getenv("HOME")
 	if home == "" {
