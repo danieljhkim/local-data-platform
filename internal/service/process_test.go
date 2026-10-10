@@ -98,6 +98,34 @@ func TestProcessManager_Stop_ByPID(t *testing.T) {
 	}
 }
 
+func TestProcessManager_Start_DetachesFromCallerSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(filepath.Join(tmpDir, "pids"), filepath.Join(tmpDir, "logs"))
+
+	pid, err := pm.Start("detached", exec.Command("sleep", "30"), "detached.log")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = pm.Stop("detached") })
+
+	// A terminal delivers Ctrl-C and hangup to the caller's process group and
+	// session; the daemon must lead its own instead.
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatalf("Getpgid(%d) error = %v", pid, err)
+	}
+	if pgid != pid || pgid == syscall.Getpgrp() {
+		t.Fatalf("daemon pgid = %d, want its own group %d (caller group %d)", pgid, pid, syscall.Getpgrp())
+	}
+	sid, err := syscall.Getsid(pid)
+	if err != nil {
+		t.Fatalf("Getsid(%d) error = %v", pid, err)
+	}
+	if sid != pid {
+		t.Fatalf("daemon session = %d, want its own session %d", sid, pid)
+	}
+}
+
 func TestProcessManager_Stop_TrimsPIDWhitespace(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidDir := filepath.Join(tmpDir, "pids")

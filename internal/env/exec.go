@@ -60,14 +60,42 @@ func ExecWithEnvironment(env *Environment, args []string, extraEnv map[string]st
 	return cmd.Run()
 }
 
+// SignalError reports that the CLI abandoned Err's operation because it
+// received Signal.
+type SignalError struct {
+	Signal syscall.Signal
+	Err    error
+}
+
+func (e *SignalError) Error() string {
+	name := e.Signal.String()
+	switch e.Signal {
+	case syscall.SIGINT:
+		name = "SIGINT"
+	case syscall.SIGTERM:
+		name = "SIGTERM"
+	}
+	if e.Err == nil {
+		return "interrupted by " + name
+	}
+	return fmt.Sprintf("interrupted by %s: %v", name, e.Err)
+}
+
+func (e *SignalError) Unwrap() error { return e.Err }
+
 // ExitCode returns the process status that should be exposed by the CLI for
 // err. Child process failures retain their exit status, while validation,
 // launch, and other native CLI errors use status 1. A child terminated by a
-// signal follows the conventional shell mapping of 128 plus the signal
-// number.
+// signal, or the CLI itself stopping for a SignalError, follows the
+// conventional shell mapping of 128 plus the signal number.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+
+	var signalErr *SignalError
+	if errors.As(err, &signalErr) {
+		return 128 + int(signalErr.Signal)
 	}
 
 	var exitErr *exec.ExitError

@@ -43,6 +43,16 @@ func TestExitCodeMapsSignaledChild(t *testing.T) {
 	}
 }
 
+func TestExitCodeMapsCLISignalError(t *testing.T) {
+	err := fmt.Errorf("start: %w", &SignalError{Signal: syscall.SIGINT, Err: errors.New("readiness canceled")})
+	if got, want := ExitCode(err), 128+int(syscall.SIGINT); got != want {
+		t.Fatalf("ExitCode() = %d, want %d", got, want)
+	}
+	if got, want := err.Error(), "start: interrupted by SIGINT: readiness canceled"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestExitCodeUsesZeroForSuccessAndOneForNativeErrors(t *testing.T) {
 	if got := ExitCode(nil); got != 0 {
 		t.Fatalf("ExitCode(nil) = %d, want 0", got)

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- Pressing Ctrl-C (or sending SIGTERM) during `local-data start` no longer kills the services through the terminal; the CLI rolls back the services that run started and exits 130 (143 for SIGTERM).
+- Started services run in their own session, so Ctrl-C or a hangup aimed at a script or shell that ran `local-data start` no longer stops them.
+
 ## [0.4.0] - 2026-08-30
 
 ### Added

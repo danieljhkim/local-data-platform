@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -343,6 +344,71 @@ func TestHDFSReadinessTimeoutUsesActiveOverlay(t *testing.T) {
 	assertNoPIDFiles(t, s.baseDir)
 }
 
+// TestInterruptDuringStartRollsBackDetachedServices sends SIGINT to the
+// process group of a start that is waiting on readiness, as a terminal does for
+// Ctrl-C. The daemon must not see that SIGINT; the CLI must roll it back with
+// SIGTERM and exit 130.
+func TestInterruptDuringStartRollsBackDetachedServices(t *testing.T) {
+	s := newSandbox(t)
+	s.initialize(false)
+	s.mustRun(nil, "profile", "set", "local")
+	s.setControl("hive-no-listen")
+
+	start := s.startInOwnProcessGroup("start")
+	metastorePID := s.waitForSignalReadyDaemon("hive", []string{"--service", "metastore"}, 15*time.Second)
+	if err := syscall.Kill(-start.pgid, syscall.SIGINT); err != nil {
+		t.Fatalf("send SIGINT to start's process group: %v", err)
+	}
+
+	output, err := start.wait(30 * time.Second)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 130 {
+		t.Fatalf("start after SIGINT: %v, want exit status 130\n%s", err, output)
+	}
+	if !strings.Contains(output, "interrupted by SIGINT") {
+		t.Fatalf("start output does not report the interrupt:\n%s", output)
+	}
+
+	waitForPIDExit(t, metastorePID, 5*time.Second)
+	if events := s.signalEvents(metastorePID); !equalArgs(events, []string{"ready", "SIGTERM"}) {
+		t.Fatalf("metastore pid %d signal events = %q, want only the rollback SIGTERM", metastorePID, events)
+	}
+	if hasInvocationWithArgs(s.records(), "hive", []string{"--service", "hiveserver2"}) {
+		t.Fatal("HiveServer2 was dispatched after the interrupt")
+	}
+	assertNoPIDFiles(t, s.baseDir)
+}
+
+// TestStartedServicesLeaveCallerProcessGroup covers a script that runs
+// `local-data start` and keeps going: Ctrl-C there signals the script's whole
+// process group, which must no longer contain the daemons.
+func TestStartedServicesLeaveCallerProcessGroup(t *testing.T) {
+	s := newSandbox(t)
+	s.initialize(false)
+	s.mustRun(nil, "profile", "set", "local")
+
+	start := s.startInOwnProcessGroup("start")
+	if output, err := start.wait(30 * time.Second); err != nil {
+		t.Fatalf("start failed: %v\n%s", err, output)
+	}
+	daemons := daemonPIDs(s.records())
+	if len(daemons) != 2 {
+		t.Fatalf("daemon pids = %v, want metastore and HiveServer2", daemons)
+	}
+
+	if err := syscall.Kill(-start.pgid, syscall.SIGINT); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("SIGINT to the caller's process group = %v, want ESRCH (daemons must not be members)", err)
+	}
+	for _, pid := range daemons {
+		if events := s.signalEvents(pid); !equalArgs(events, []string{"ready"}) {
+			t.Fatalf("daemon pid %d signal events = %q, want none", pid, events)
+		}
+	}
+	if status := s.mustRun(nil, "status"); strings.Contains(status, "stopped") {
+		t.Fatalf("services stopped after caller group SIGINT:\n%s", status)
+	}
+}
+
 func TestStalePIDOwnershipMismatchDoesNotKillUnrelatedProcess(t *testing.T) {
 	s := newSandbox(t)
 	s.initialize(false)
@@ -579,6 +645,109 @@ func (s *sandbox) run(input *strings.Reader, args ...string) (string, error) {
 		return string(output), fmt.Errorf("command timeout: %w", ctx.Err())
 	}
 	return string(output), err
+}
+
+// backgroundRun is a local-data invocation in its own process group, which
+// stands in for a terminal's foreground job.
+type backgroundRun struct {
+	t        *testing.T
+	cmd      *exec.Cmd
+	pgid     int
+	output   bytes.Buffer
+	err      error
+	finished chan struct{}
+}
+
+func (s *sandbox) startInOwnProcessGroup(args ...string) *backgroundRun {
+	s.t.Helper()
+	run := &backgroundRun{t: s.t, finished: make(chan struct{})}
+	run.cmd = exec.Command(localDataBin, args...)
+	run.cmd.Dir = repositoryRoot
+	run.cmd.Env = s.env
+	run.cmd.Stdout = &run.output
+	run.cmd.Stderr = &run.output
+	run.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := run.cmd.Start(); err != nil {
+		s.t.Fatalf("start local-data %s: %v", strings.Join(args, " "), err)
+	}
+	run.pgid = run.cmd.Process.Pid
+	go func() {
+		run.err = run.cmd.Wait()
+		close(run.finished)
+	}()
+	s.t.Cleanup(func() {
+		select {
+		case <-run.finished:
+		default:
+			_ = syscall.Kill(-run.pgid, syscall.SIGKILL)
+			<-run.finished
+		}
+	})
+	return run
+}
+
+// wait returns the combined output and exit error once the run finishes.
+func (r *backgroundRun) wait(timeout time.Duration) (string, error) {
+	r.t.Helper()
+	select {
+	case <-r.finished:
+		return r.output.String(), r.err
+	case <-time.After(timeout):
+		_ = syscall.Kill(-r.pgid, syscall.SIGKILL)
+		<-r.finished
+		r.t.Fatalf("local-data did not exit within %s:\n%s", timeout, r.output.String())
+		return "", nil
+	}
+}
+
+// waitForSignalReadyDaemon returns the PID of the shim invoked as name with
+// args once it has installed its signal handler.
+func (s *sandbox) waitForSignalReadyDaemon(name string, args []string, timeout time.Duration) int {
+	s.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, record := range s.records() {
+			if record.Name == name && equalArgs(record.Args, args) {
+				for _, event := range s.signalEvents(record.PID) {
+					if event == "ready" {
+						return record.PID
+					}
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	s.t.Fatalf("%s %q did not become ready within %s; records: %#v", name, args, timeout, s.records())
+	return 0
+}
+
+// signalEvents returns the shim's recorded signal events for pid, in order.
+func (s *sandbox) signalEvents(pid int) []string {
+	s.t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.baseDir, "shim-signals.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var event struct {
+			PID   int    `json:"pid"`
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			s.t.Fatalf("decode shim signal event %q: %v", line, err)
+		}
+		if event.PID == pid {
+			events = append(events, event.Event)
+		}
+	}
+	return events
 }
 
 func (s *sandbox) records() []invocation {

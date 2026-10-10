@@ -57,7 +57,11 @@ func NewProcessManager(pidDir, logDir string) *ProcessManager {
 }
 
 // Start starts a process and writes its PID to a file
-// Mirrors Bash: nohup cmd > log 2>&1 &
+// Start launches cmd as a daemon: output is appended to logFile, the PID file
+// is published atomically, and the child must survive the startup grace
+// period. The child runs in its own session so terminal job-control signals
+// aimed at the caller (Ctrl-C's SIGINT, SIGHUP on hangup) never reach it; only
+// Stop or a start rollback ends it.
 func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int, error) {
 	// Ensure directories exist
 	if err := os.MkdirAll(pm.PidDir, 0755); err != nil {
@@ -77,6 +81,8 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 	// Redirect stdout and stderr to log file
 	cmd.Stdout = logf
 	cmd.Stderr = logf
+
+	detachFromCallerSession(cmd)
 
 	// Start the process (non-blocking)
 	if err := cmd.Start(); err != nil {
@@ -109,6 +115,15 @@ func (pm *ProcessManager) Start(name string, cmd *exec.Cmd, logFile string) (int
 	pm.trackChild(cmd)
 
 	return pid, nil
+}
+
+// detachFromCallerSession makes cmd a session leader with no controlling
+// terminal, so it leaves the caller's process group and session.
+func detachFromCallerSession(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
 }
 
 // Stop stops a process by reading its PID file and sending SIGTERM

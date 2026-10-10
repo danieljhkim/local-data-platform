@@ -320,10 +320,46 @@ func acceptConnections(listener net.Listener) {
 func waitForSignal(listener net.Listener) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
-	<-signals
+	recordSignalEvent("ready")
+	sig := <-signals
+	recordSignalEvent(signalName(sig))
 	if listener != nil {
 		_ = listener.Close()
 	}
+}
+
+// recordSignalEvent appends to shim-signals.log so tests can tell a rollback
+// SIGTERM from a terminal SIGINT. "ready" marks the handler as installed.
+func recordSignalEvent(event string) {
+	encoded, err := json.Marshal(struct {
+		PID   int    `json:"pid"`
+		Event string `json:"event"`
+	}{os.Getpid(), event})
+	if err != nil {
+		fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(baseDir(), "shim-signals.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fatal(err)
+	}
+	_, writeErr := file.Write(append(encoded, '\n'))
+	closeErr := file.Close()
+	if writeErr != nil {
+		fatal(writeErr)
+	}
+	if closeErr != nil {
+		fatal(closeErr)
+	}
+}
+
+func signalName(sig os.Signal) string {
+	switch sig {
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	}
+	return sig.String()
 }
 
 func controlledFailure(key string) bool {
