@@ -43,9 +43,13 @@ func NewJavaDetector() *JavaDetector {
 	return &JavaDetector{}
 }
 
-// FindJavaHome returns the Java 17 path from Homebrew installation.
+// FindJavaHome honors an explicit JAVA_HOME, otherwise retaining the Java 17
+// default used by the Hadoop stack.
 // Checks both ARM (/opt/homebrew) and Intel (/usr/local) Homebrew prefixes.
 func (j *JavaDetector) FindJavaHome() string {
+	if home := os.Getenv("JAVA_HOME"); home != "" {
+		return home
+	}
 	candidates := []string{
 		"/opt/homebrew/opt/openjdk@17", // ARM Mac
 		"/usr/local/opt/openjdk@17",    // Intel Mac
@@ -59,12 +63,10 @@ func (j *JavaDetector) FindJavaHome() string {
 }
 
 // MajorVersion returns the major version of the installed Java
-// Returns 17 for the hardcoded Java 17 installation, or 0 if Java is not found
+// Returns 0 if the selected runtime cannot be measured.
 func (j *JavaDetector) MajorVersion() int {
-	if j.FindJavaHome() != "" {
-		return 17
-	}
-	return 0
+	major, _ := selectedJavaMajor(&Environment{JavaHome: j.FindJavaHome(), Path: os.Getenv("PATH")})
+	return major
 }
 
 // IsInstalled checks if java command is available

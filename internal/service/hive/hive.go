@@ -102,6 +102,12 @@ func (h *HiveService) Start() error {
 // ready before HiveServer2 is dispatched, and both listeners are required for
 // success.
 func (h *HiveService) StartContext(ctx context.Context) (service.StartResult, error) {
+	if err := ctx.Err(); err != nil {
+		return service.StartResult{}, err
+	}
+	if err := env.CheckHiveJava(h.env); err != nil {
+		return service.StartResult{}, err
+	}
 	util.Log("Starting Hive services...")
 
 	// Clean up stale Derby lock files if using embedded Derby

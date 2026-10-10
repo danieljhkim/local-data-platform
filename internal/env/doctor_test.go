@@ -1,10 +1,71 @@
 package env
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestDoctorHiveJavaCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		classMajor      uint16
+		javaVersion     string
+		wantMajor       int
+		wantRecommended int
+		wantHealthy     bool
+	}{
+		{"Java17Hive", 61, "17.0.1", 17, 17, true},
+		{"Java21HiveOnJava17", 65, "17.0.1", 17, 21, false},
+		{"Java21HiveOnJava21", 65, "21.0.2", 21, 21, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hiveHome := t.TempDir()
+			writeHiveClassFixture(t, hiveHome, "hive-beeline-test.jar", "org/apache/hive/beeline/schematool/HiveSchemaTool.class", hiveClassHeader(tc.classMajor))
+			javaHome := javaHomeFixture(t, tc.javaVersion)
+			bin := t.TempDir()
+			for _, name := range []string{"brew", "hdfs", "hive"} {
+				writeExecutable(t, bin, name, "#!/bin/sh\nexit 0\n")
+			}
+			t.Setenv("JAVA_HOME", javaHome)
+			t.Setenv("HIVE_HOME", hiveHome)
+			t.Setenv("HADOOP_HOME", bin)
+			t.Setenv("SPARK_HOME", bin)
+			t.Setenv("PATH", bin)
+			for _, target := range []string{"", "init", "start hive", "start hdfs"} {
+				result := RunDoctor(target)
+				var human bytes.Buffer
+				if err := result.PrintTo(&human); err != nil {
+					t.Fatal(err)
+				}
+				data, err := json.Marshal(result.JSONReport())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var report DoctorJSONReport
+				if err := json.Unmarshal(data, &report); err != nil {
+					t.Fatal(err)
+				}
+				if report.Java.Major != tc.wantMajor || report.Java.RecommendedMajor != tc.wantRecommended || report.Java.IsRecommended != tc.wantHealthy || report.Result.Healthy != tc.wantHealthy {
+					t.Fatalf("target %q report: %s", target, data)
+				}
+				if !tc.wantHealthy {
+					if result.ExitCode() != 1 || !strings.Contains(human.String(), "hive Java mismatch") || !strings.Contains(report.Java.Error, "requires Java 21") {
+						t.Fatalf("mismatch not reported: %s / %s", human.String(), data)
+					}
+					if strings.Contains(human.String(), "OK   java") {
+						t.Fatal("mismatch reported as OK java")
+					}
+				} else if result.ExitCode() != 0 {
+					t.Fatalf("healthy fixture exited nonzero: %s", human.String())
+				}
+			}
+		})
+	}
+}
 
 func TestRunDoctor_General(t *testing.T) {
 	result := RunDoctor("")
