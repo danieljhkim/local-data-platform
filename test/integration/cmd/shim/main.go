@@ -255,8 +255,25 @@ func hangUntilSignaled() {
 		<-exited
 		os.Exit(143)
 	case <-exited:
-		os.Exit(1)
+		// A group signal kills the descendant too, and its exit can be
+		// observed before the runtime relays the launcher's own copy of the
+		// signal. A signaled descendant means one is in flight, so wait for it.
+		if !childKilledBySignal(child) {
+			os.Exit(1)
+		}
+		select {
+		case sig := <-signals:
+			recordSignalEvent(signalName(sig))
+			os.Exit(143)
+		case <-time.After(5 * time.Second):
+			os.Exit(1)
+		}
 	}
+}
+
+func childKilledBySignal(child *exec.Cmd) bool {
+	status, ok := child.ProcessState.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled()
 }
 
 func runLSOF(args []string) {
