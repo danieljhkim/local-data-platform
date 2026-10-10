@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,6 +129,14 @@ func EnsureNameNodeFormatted(hadoopConfDir string) error {
 // EnsureNameNodeFormattedWithEnv formats a first-use NameNode using the same
 // environment contract as the service processes that will use its storage.
 func EnsureNameNodeFormattedWithEnv(hadoopConfDir string, runtimeEnv []string) error {
+	return EnsureNameNodeFormattedContext(context.Background(), hadoopConfDir, runtimeEnv)
+}
+
+// EnsureNameNodeFormattedContext is EnsureNameNodeFormattedWithEnv with
+// cancellation. Every storage safety check runs before the format command is
+// launched, and a canceled ctx stops a running format and is returned as
+// ctx.Err() without verification or any retry.
+func EnsureNameNodeFormattedContext(ctx context.Context, hadoopConfDir string, runtimeEnv []string) error {
 	// Parse namenode directories from hdfs-site.xml
 	hdfsConf := filepath.Join(hadoopConfDir, "hdfs-site.xml")
 	dirs, err := util.ParseNameNodeDirs(hdfsConf)
@@ -174,8 +183,15 @@ func EnsureNameNodeFormattedWithEnv(hadoopConfDir string, runtimeEnv []string) e
 			"    local-data stop hdfs", pid, strings.Join(dirs, ", "))
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	util.Log("Formatting NameNode (first time)")
-	if err := formatNameNodeForFormat(hadoopConfDir, runtimeEnv); err != nil {
+	if err := formatNameNodeForFormat(ctx, hadoopConfDir, runtimeEnv); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("NameNode format interrupted; storage directories may be partially written and must be inspected before retrying: %s: %w",
+				strings.Join(dirs, ", "), ctxErr)
+		}
 		return fmt.Errorf("failed to format NameNode: %w", err)
 	}
 	if err := verifyFormattedNameNodeStorage(dirs); err != nil {
@@ -186,8 +202,8 @@ func EnsureNameNodeFormattedWithEnv(hadoopConfDir string, runtimeEnv []string) e
 }
 
 // formatNameNode runs the HDFS namenode format command
-func formatNameNode(hadoopConfDir string, runtimeEnv []string) error {
-	cmd, err := env.Command("hdfs", []string{"namenode", "-format", "-force", "-nonInteractive"}, withHadoopConfDir(runtimeEnv, hadoopConfDir))
+func formatNameNode(ctx context.Context, hadoopConfDir string, runtimeEnv []string) error {
+	cmd, err := env.CommandContext(ctx, "hdfs", []string{"namenode", "-format", "-force", "-nonInteractive"}, withHadoopConfDir(runtimeEnv, hadoopConfDir))
 	if err != nil {
 		return err
 	}
@@ -196,6 +212,9 @@ func formatNameNode(hadoopConfDir string, runtimeEnv []string) error {
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		// Show output to help diagnose the issue
 		if len(output) > 0 {
 			util.Warn("Format command output:\n%s", string(output))
@@ -239,6 +258,12 @@ func CreateCommonHDFSDirs(username string) error {
 
 // CreateCommonHDFSDirsWithEnv creates common HDFS directories with custom environment
 func CreateCommonHDFSDirsWithEnv(username string, runtimeEnv []string) error {
+	return CreateCommonHDFSDirsContext(context.Background(), username, runtimeEnv)
+}
+
+// CreateCommonHDFSDirsContext is CreateCommonHDFSDirsWithEnv with cancellation.
+// A canceled ctx stops the running hdfs command and is returned as ctx.Err().
+func CreateCommonHDFSDirsContext(ctx context.Context, username string, runtimeEnv []string) error {
 	// Create directories
 	dirs := []struct {
 		path string
@@ -251,27 +276,36 @@ func CreateCommonHDFSDirsWithEnv(username string, runtimeEnv []string) error {
 	}
 
 	for _, dir := range dirs {
-		// Create directory
-		cmd, err := env.Command("hdfs", []string{"dfs", "-mkdir", "-p", dir.path}, runtimeEnv)
-		if err != nil {
-			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, runtimeEnv, err)
+		if err := runHDFSControl(ctx, runtimeEnv, "dfs", "-mkdir", "-p", dir.path); err != nil {
+			return err
 		}
-		if err := cmd.Run(); err != nil {
-			return hdfsControlCommandError("hdfs dfs -mkdir -p "+dir.path, runtimeEnv, err)
-		}
-
-		// Set permissions if specified
 		if dir.perm != "" {
-			cmd, err = env.Command("hdfs", []string{"dfs", "-chmod", dir.perm, dir.path}, runtimeEnv)
-			if err != nil {
-				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, runtimeEnv, err)
-			}
-			if err := cmd.Run(); err != nil {
-				return hdfsControlCommandError("hdfs dfs -chmod "+dir.perm+" "+dir.path, runtimeEnv, err)
+			if err := runHDFSControl(ctx, runtimeEnv, "dfs", "-chmod", dir.perm, dir.path); err != nil {
+				return err
 			}
 		}
 	}
 
+	return nil
+}
+
+// runHDFSControl runs one hdfs control command. Cancellation is reported as
+// ctx.Err(), not as a control-command failure.
+func runHDFSControl(ctx context.Context, runtimeEnv []string, args ...string) error {
+	description := "hdfs " + strings.Join(args, " ")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd, err := env.CommandContext(ctx, "hdfs", args, runtimeEnv)
+	if err != nil {
+		return hdfsControlCommandError(description, runtimeEnv, err)
+	}
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return hdfsControlCommandError(description, runtimeEnv, err)
+	}
 	return nil
 }
 

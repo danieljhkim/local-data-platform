@@ -2,15 +2,18 @@ package env
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestExitCodePreservesChildStatusAndWrappedErrors(t *testing.T) {
@@ -167,4 +170,50 @@ func writeExecutable(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write executable %s: %v", name, err)
 	}
 	return path
+}
+
+func TestCommandContextCancellationStopsDescendantsPromptly(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	tool := writeExecutable(t, dir, "tool", "#!/bin/sh\nsleep 30 &\necho $! > \"$1\"\nwait\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd, err := CommandContext(ctx, tool, []string{pidFile}, []string{"PATH=/bin:/usr/bin"})
+	if err != nil {
+		t.Fatalf("CommandContext() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	done := make(chan error, 1)
+	go func() { done <- cmd.Run() }()
+
+	var childPID int
+	deadline := time.Now().Add(5 * time.Second)
+	for childPID == 0 && time.Now().Before(deadline) {
+		if data, err := os.ReadFile(pidFile); err == nil {
+			childPID, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID == 0 {
+		t.Fatal("tool did not record its descendant pid")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("canceled command unexpectedly succeeded")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("canceled command did not return promptly")
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for syscall.Kill(childPID, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if syscall.Kill(childPID, 0) == nil {
+		t.Fatalf("descendant pid %d survived cancellation", childPID)
+	}
 }

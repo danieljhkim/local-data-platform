@@ -82,7 +82,7 @@ func (h *HDFSService) StartContext(ctx context.Context) (service.StartResult, er
 
 	// Ensure NameNode is formatted with the same active overlay as all
 	// subsequent daemon and control commands.
-	if err := EnsureNameNodeFormattedWithEnv(h.env.HadoopConfDir, runtimeEnv); err != nil {
+	if err := EnsureNameNodeFormattedContext(ctx, h.env.HadoopConfDir, runtimeEnv); err != nil {
 		return service.StartResult{}, err
 	}
 
@@ -121,7 +121,7 @@ func (h *HDFSService) startComponents(ctx context.Context, runtimeEnv []string, 
 				if h.createDirsHook != nil {
 					return h.createDirsHook(runtimeEnv)
 				}
-				return h.createCommonDirectories(runtimeEnv)
+				return h.createCommonDirectories(ctx, runtimeEnv)
 			},
 			Stop: func() error { return h.stopStarted("datanode") },
 		},
@@ -149,14 +149,14 @@ func (h *HDFSService) startDataNodeStep(ctx context.Context, runtimeEnv []string
 	return h.startDataNode(runtimeEnv)
 }
 
-func (h *HDFSService) createCommonDirectories(runtimeEnv []string) error {
+func (h *HDFSService) createCommonDirectories(ctx context.Context, runtimeEnv []string) error {
 	util.Log("Creating common HDFS directories...")
 	currentUser, err := user.Current()
 	username := "hadoop"
 	if err == nil {
 		username = currentUser.Username
 	}
-	if err := CreateCommonHDFSDirsWithEnv(username, runtimeEnv); err != nil {
+	if err := CreateCommonHDFSDirsContext(ctx, username, runtimeEnv); err != nil {
 		return fmt.Errorf("failed to create common HDFS directories: %w", err)
 	}
 	return nil

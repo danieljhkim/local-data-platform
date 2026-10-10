@@ -409,6 +409,183 @@ func TestStartedServicesLeaveCallerProcessGroup(t *testing.T) {
 	}
 }
 
+// TestSignalDuringBlockingStartupSubprocess sends one signal directly to the
+// start CLI (not its process group, as a service manager or script would) while
+// a startup subprocess hangs. The subprocess and its descendant must be
+// canceled without a second signal, only services this invocation launched may
+// be rolled back, in reverse order, and nothing later may be dispatched.
+func TestSignalDuringBlockingStartupSubprocess(t *testing.T) {
+	cases := []struct {
+		name string
+		// preStartHDFS starts HDFS in a prior invocation so the hung run finds
+		// it already running and must leave it alone.
+		preStartHDFS bool
+		controls     []string
+		hang         string
+		hangArgs     []string
+		signal       syscall.Signal
+		wantExit     int
+		wantSignal   string
+		// rolledBack lists the daemons this invocation launches before the hang.
+		rolledBack []invocationKey
+		// notDispatched lists daemons that must never be launched.
+		notDispatched []invocationKey
+		// survivors lists daemons from the prior invocation.
+		survivors []invocationKey
+	}{
+		{
+			name:          "schema info SIGTERM",
+			preStartHDFS:  true,
+			controls:      []string{"schematool-info-hang"},
+			hang:          "schematool",
+			hangArgs:      []string{"-dbType", "postgres", "-info"},
+			signal:        syscall.SIGTERM,
+			wantExit:      143,
+			wantSignal:    "SIGTERM",
+			rolledBack:    []invocationKey{{"yarn", "nodemanager"}, {"yarn", "resourcemanager"}},
+			notDispatched: []invocationKey{{"hive", "--service"}},
+			survivors:     []invocationKey{{"hdfs", "datanode"}, {"hdfs", "namenode"}},
+		},
+		{
+			name:          "schema init SIGINT",
+			preStartHDFS:  true,
+			controls:      []string{"schematool-not-initialized", "schematool-init-hang"},
+			hang:          "schematool",
+			hangArgs:      []string{"-dbType", "postgres", "-initSchema"},
+			signal:        syscall.SIGINT,
+			wantExit:      130,
+			wantSignal:    "SIGINT",
+			rolledBack:    []invocationKey{{"yarn", "nodemanager"}, {"yarn", "resourcemanager"}},
+			notDispatched: []invocationKey{{"hive", "--service"}},
+			survivors:     []invocationKey{{"hdfs", "datanode"}, {"hdfs", "namenode"}},
+		},
+		{
+			name:          "namenode format SIGTERM",
+			controls:      []string{"hdfs-format-hang"},
+			hang:          "hdfs",
+			hangArgs:      []string{"namenode", "-format", "-force", "-nonInteractive"},
+			signal:        syscall.SIGTERM,
+			wantExit:      143,
+			wantSignal:    "SIGTERM",
+			notDispatched: []invocationKey{{"hdfs", "namenode"}, {"hdfs", "datanode"}, {"yarn", "resourcemanager"}, {"hive", "--service"}},
+		},
+		{
+			name:          "namenode format SIGINT",
+			controls:      []string{"hdfs-format-hang"},
+			hang:          "hdfs",
+			hangArgs:      []string{"namenode", "-format", "-force", "-nonInteractive"},
+			signal:        syscall.SIGINT,
+			wantExit:      130,
+			wantSignal:    "SIGINT",
+			notDispatched: []invocationKey{{"hdfs", "namenode"}, {"hdfs", "datanode"}, {"yarn", "resourcemanager"}, {"hive", "--service"}},
+		},
+		{
+			name:          "hdfs control SIGINT",
+			controls:      []string{"hdfs-mkdir-hang"},
+			hang:          "hdfs",
+			hangArgs:      []string{"dfs", "-mkdir", "-p", "/tmp"},
+			signal:        syscall.SIGINT,
+			wantExit:      130,
+			wantSignal:    "SIGINT",
+			rolledBack:    []invocationKey{{"hdfs", "datanode"}, {"hdfs", "namenode"}},
+			notDispatched: []invocationKey{{"yarn", "resourcemanager"}, {"hive", "--service"}},
+		},
+		{
+			name:          "hdfs control SIGTERM",
+			controls:      []string{"hdfs-mkdir-hang"},
+			hang:          "hdfs",
+			hangArgs:      []string{"dfs", "-mkdir", "-p", "/tmp"},
+			signal:        syscall.SIGTERM,
+			wantExit:      143,
+			wantSignal:    "SIGTERM",
+			rolledBack:    []invocationKey{{"hdfs", "datanode"}, {"hdfs", "namenode"}},
+			notDispatched: []invocationKey{{"yarn", "resourcemanager"}, {"hive", "--service"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.initialize(true)
+			s.mustRun(nil, "profile", "set", "hdfs")
+
+			var survivorPIDs []int
+			if tc.preStartHDFS {
+				s.mustRun(nil, "start", "hdfs")
+				for _, key := range tc.survivors {
+					survivorPIDs = append(survivorPIDs, s.daemonPID(key))
+				}
+			}
+			before := len(s.records())
+			for _, control := range tc.controls {
+				s.setControl(control)
+			}
+
+			start := s.startInOwnProcessGroup("start")
+			hangPID := s.waitForSignalReadyDaemon(tc.hang, tc.hangArgs, 15*time.Second)
+			childPID := s.signalChildPID(hangPID)
+			rolledBackPIDs := make([]int, 0, len(tc.rolledBack))
+			for _, key := range tc.rolledBack {
+				rolledBackPIDs = append(rolledBackPIDs, s.waitForDaemonPID(key, before, 15*time.Second))
+			}
+
+			if err := syscall.Kill(start.cmd.Process.Pid, tc.signal); err != nil {
+				t.Fatalf("send %v to start: %v", tc.signal, err)
+			}
+			output, err := start.wait(15 * time.Second)
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != tc.wantExit {
+				t.Fatalf("start after %v: %v, want exit status %d\n%s", tc.signal, err, tc.wantExit, output)
+			}
+			if !strings.Contains(output, "interrupted by "+tc.wantSignal) {
+				t.Fatalf("start output does not report the interrupt:\n%s", output)
+			}
+
+			// The hung subprocess and its descendant were canceled by the CLI.
+			waitForPIDExit(t, hangPID, 5*time.Second)
+			waitForPIDExit(t, childPID, 5*time.Second)
+			if events := s.signalEvents(hangPID); !hasEvent(events, "SIGTERM") {
+				t.Fatalf("hung subprocess pid %d signal events = %q, want the CLI's SIGTERM", hangPID, events)
+			}
+
+			// Only this invocation's daemons were rolled back, newest first.
+			for _, pid := range rolledBackPIDs {
+				waitForPIDExit(t, pid, 5*time.Second)
+				if events := s.signalEvents(pid); !equalArgs(events, []string{"ready", "SIGTERM"}) {
+					t.Fatalf("rolled back pid %d signal events = %q, want the rollback SIGTERM only", pid, events)
+				}
+			}
+			if order := s.sigtermOrder(rolledBackPIDs); !equalInts(order, rolledBackPIDs) {
+				t.Fatalf("rollback SIGTERM order = %v, want reverse start order %v", order, rolledBackPIDs)
+			}
+			for _, key := range tc.notDispatched {
+				for _, record := range s.records()[before:] {
+					if key.matches(record) {
+						t.Fatalf("%s %s was dispatched after the interrupt", key.name, key.arg)
+					}
+				}
+			}
+			for _, pid := range survivorPIDs {
+				if err := syscall.Kill(pid, 0); err != nil {
+					t.Fatalf("pre-existing daemon pid %d did not survive rollback: %v", pid, err)
+				}
+				if events := s.signalEvents(pid); !equalArgs(events, []string{"ready"}) {
+					t.Fatalf("pre-existing daemon pid %d signal events = %q, want none", pid, events)
+				}
+			}
+			if !tc.preStartHDFS {
+				assertNoPIDFiles(t, s.baseDir)
+			}
+			if tc.hang == "hdfs" && tc.hangArgs[0] == "namenode" {
+				version := filepath.Join(s.baseDir, "state", "hdfs", "namenode", "current", "VERSION")
+				if _, err := os.Stat(version); err == nil {
+					t.Fatalf("canceled format left a VERSION file: %s", version)
+				}
+			}
+		})
+	}
+}
+
 func TestStalePIDOwnershipMismatchDoesNotKillUnrelatedProcess(t *testing.T) {
 	s := newSandbox(t)
 	s.initialize(false)
@@ -748,6 +925,114 @@ func (s *sandbox) signalEvents(pid int) []string {
 		}
 	}
 	return events
+}
+
+// invocationKey names a daemon by shim name and its first argument.
+type invocationKey struct {
+	name string
+	arg  string
+}
+
+// matches reports whether record launched this daemon. A "--service" key
+// matches any Hive daemon.
+func (k invocationKey) matches(record invocation) bool {
+	if record.Name != k.name {
+		return false
+	}
+	if k.arg == "--service" {
+		return argsHavePrefix(record.Args, []string{"--service"})
+	}
+	return len(record.Args) == 1 && record.Args[0] == k.arg
+}
+
+func (s *sandbox) daemonPID(key invocationKey) int {
+	s.t.Helper()
+	return s.waitForDaemonPID(key, 0, 5*time.Second)
+}
+
+// waitForDaemonPID returns the PID of the shim launched as key by a record at
+// or after index from.
+func (s *sandbox) waitForDaemonPID(key invocationKey, from int, timeout time.Duration) int {
+	s.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		records := s.records()
+		if from > len(records) {
+			from = len(records)
+		}
+		for _, record := range records[from:] {
+			if key.matches(record) {
+				return record.PID
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	s.t.Fatalf("%s %s was not launched within %s", key.name, key.arg, timeout)
+	return 0
+}
+
+// signalChildPID returns the descendant PID a hung shim recorded.
+func (s *sandbox) signalChildPID(pid int) int {
+	s.t.Helper()
+	for _, event := range s.signalEvents(pid) {
+		if value, found := strings.CutPrefix(event, "child="); found {
+			child, err := strconv.Atoi(value)
+			if err != nil {
+				s.t.Fatalf("invalid child event %q: %v", event, err)
+			}
+			return child
+		}
+	}
+	s.t.Fatalf("pid %d recorded no descendant", pid)
+	return 0
+}
+
+// sigtermOrder returns pids in the order the shim log recorded their SIGTERM.
+func (s *sandbox) sigtermOrder(pids []int) []int {
+	s.t.Helper()
+	wanted := make(map[int]bool, len(pids))
+	for _, pid := range pids {
+		wanted[pid] = true
+	}
+	data, err := os.ReadFile(filepath.Join(s.baseDir, "shim-signals.log"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var order []int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event struct {
+			PID   int    `json:"pid"`
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			s.t.Fatalf("decode shim signal event %q: %v", line, err)
+		}
+		if event.Event == "SIGTERM" && wanted[event.PID] {
+			order = append(order, event.PID)
+		}
+	}
+	return order
+}
+
+func hasEvent(events []string, want string) bool {
+	for _, event := range events {
+		if event == want {
+			return true
+		}
+	}
+	return false
+}
+
+func equalInts(actual, expected []int) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range actual {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *sandbox) records() []invocation {

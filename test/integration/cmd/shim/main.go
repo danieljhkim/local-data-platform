@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -143,6 +144,9 @@ func runHDFS(args []string) {
 		return
 	}
 	if args[0] == "namenode" && contains(args, "-format") {
+		if controlExists("hdfs-format-hang") {
+			hangUntilSignaled()
+		}
 		versionDir := filepath.Join(baseDir(), "state", "hdfs", "namenode", "current")
 		if err := os.MkdirAll(versionDir, 0o755); err != nil {
 			fatal(err)
@@ -159,6 +163,9 @@ func runHDFS(args []string) {
 		}
 		waitForSignal(nil)
 		return
+	}
+	if args[0] == "dfs" && contains(args, "-mkdir") && controlExists("hdfs-mkdir-hang") {
+		hangUntilSignaled()
 	}
 	if len(args) >= 3 && args[0] == "dfsadmin" && args[1] == "-safemode" && args[2] == "get" {
 		if controlExists("hdfs-safemode-timeout") {
@@ -207,10 +214,49 @@ func runHive(args []string) {
 
 func runSchemaTool(args []string) {
 	if contains(args, "-initSchema") {
+		if controlExists("schematool-init-hang") {
+			hangUntilSignaled()
+		}
 		fmt.Println("Initialization script completed")
 		return
 	}
+	if controlExists("schematool-info-hang") {
+		hangUntilSignaled()
+	}
+	if controlExists("schematool-not-initialized") {
+		fmt.Fprintln(os.Stderr, `relation "VERSION" does not exist`)
+		os.Exit(1)
+	}
 	fmt.Println("Hive distribution version 4.0.0")
+}
+
+// hangUntilSignaled stands in for a launcher script whose worker blocks: it
+// starts a /bin/sleep descendant and waits for it. The first SIGTERM or SIGINT
+// is recorded as a signal event ("ready" marks the handler installed, and
+// "child=<pid>" names the descendant), so tests can tell whether cancellation
+// reached the launcher and its descendant. It exits 143 afterwards.
+func hangUntilSignaled() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	child := exec.Command("/bin/sleep", "30")
+	if err := child.Start(); err != nil {
+		fatal(err)
+	}
+	recordSignalEvent("child=" + strconv.Itoa(child.Process.Pid))
+	recordSignalEvent("ready")
+	exited := make(chan struct{})
+	go func() {
+		_ = child.Wait()
+		close(exited)
+	}()
+	select {
+	case sig := <-signals:
+		recordSignalEvent(signalName(sig))
+		<-exited
+		os.Exit(143)
+	case <-exited:
+		os.Exit(1)
+	}
 }
 
 func runLSOF(args []string) {
