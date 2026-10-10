@@ -148,13 +148,20 @@ func getPaths() *config.Paths {
 	return paths
 }
 
-// getRepoRoot determines the repository root directory
-// Looks for conf/ directory next to the binary or one level up
-// Returns empty string if not found (repo root is optional with generator-based profiles)
+// getRepoRoot determines the repository root directory from the installed
+// binary's location. The working directory is intentionally not trusted for
+// executable lookup because it may belong to an unrelated project.
+// Returns empty string if not found (repo root is optional with generator-based profiles).
 func getRepoRoot() string {
-	// Get the executable path
 	exe, err := os.Executable()
-	if err != nil {
+	if err != nil || exe == "" {
+		return ""
+	}
+	return repoRootFromExecutable(exe)
+}
+
+func repoRootFromExecutable(exe string) string {
+	if exe == "" {
 		return ""
 	}
 
@@ -172,24 +179,7 @@ func getRepoRoot() string {
 		return parent
 	}
 
-	// Fallback: use current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-
-	// Check if conf/ is in current directory
-	if fileExists(filepath.Join(cwd, "conf")) {
-		return cwd
-	}
-
-	// Check if conf/ is one level up from current directory
-	parent = filepath.Dir(cwd)
-	if fileExists(filepath.Join(parent, "conf")) {
-		return parent
-	}
-
-	// Repo root not found - this is OK since profiles are now generated
+	// Repo root not found - this is OK since profiles are now generated.
 	return ""
 }
 
