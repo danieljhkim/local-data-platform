@@ -1,332 +1,216 @@
 # local-data-platform
 
-- **macOS only** (Homebrew-first), supporting both Apple Silicon (`darwin/arm64`) and Intel (`darwin/amd64`) Macs
-- Go-based CLI (`local-data`)
+A single-machine Hadoop (HDFS + YARN) + Hive + Spark environment for macOS, managed by one Go CLI: `local-data`.
 
-Personally, one of the most dreadful aspects of working on data pipelines is the "waiting" while spinning up a cluster on cloud, and the disconnect between the cloud and my local machine.
+Validating an HDFS + Hive + Spark pipeline usually means spinning up a cloud cluster and waiting. `local-data` gives you the same stack on your laptop in a few commands, so you can iterate locally and save the cloud for the real run.
 
-If you are in this unfortunate situation where you must run your (hdfs + hive + spark) pipelines in cloud everytime for validation, I have a solution for you that will save you both time and sanity.
-
-Setting up a local environment is a pain, and I've had to do it many times. So I've created a tool that will help you set up a local environment quickly and easily.
-
-Local-data-platform is a local, single-machine Hadoop (HDFS + YARN) + Hive + Spark environment manager and a wrapper around the Hadoop, Hive, and Spark commands with a modern Go CLI.
-
-What you get:
-
-- A modular `local-data` CLI to manage HDFS/YARN/Hive/Spark in one place
-- **Profile overlays**: `$BASE_DIR/conf/profiles/<name>` → runtime overlay at `$BASE_DIR/conf/current`
-- **Typed config generation**: configs are defined as Go structs (`internal/config/schema`) and serialized to XML/conf files
-- **Hermetic execution**: wrapper commands auto-inject the active runtime overlay environment
-- **Multiple metastore backends**: Derby (default, zero-config), Postgres, or MySQL
-- Per-service logs + status + stop/start helpers
-- Integrated wrapper commands for `hdfs`, `hive`, `yarn`, `pyspark`, and `spark-submit`
-- 2 profile choices:
-  1. **local**: local spark and hive (warehouse on local filesystem)
-  2. **hdfs**: YARN + NameNode + DataNode + spark + hive (warehouse on HDFS)
-
-**Prerequisites:**
-
-- Homebrew
-- Optional: Postgres/MySQL metastore setup (Derby is default): [METASTORE_SETUP.md](docs/METASTORE_SETUP.md)
+- **macOS only**, Homebrew-first; native binaries for Apple Silicon (`darwin/arm64`) and Intel (`darwin/amd64`)
+- **Two profiles**: `local` (Hive + Spark, warehouse on the local filesystem) or `hdfs` (full HDFS + YARN + Hive + Spark)
+- **Zero-config metastore**: Derby by default; Postgres or MySQL optional
+- **Hermetic wrappers**: `hdfs`, `hadoop`, `yarn`, `hive`, `pyspark`, and `spark-submit` always run against the active profile's config
+- **Typed config generation**: Hadoop/Hive/Spark configs are Go structs serialized to XML/conf — no hand-edited XML
+- **Service lifecycle**: start/stop/status, per-service logs with `--follow`, and a dependency doctor
+- **Scriptable**: `status --json` and `env doctor --json` emit versioned JSON ([docs/JSON_OUTPUT.md](docs/JSON_OUTPUT.md))
 
 ---
 
-## Installation
+## Install
 
-### Option 1: Install via Homebrew (Recommended)
+### Homebrew (recommended)
 
-Installing via Homebrew will install latest `local-data` CLI binary + required dependencies (Hadoop, Hive, Spark, jdk@17). The formula selects the native binary for your Mac automatically — Apple Silicon (`darwin/arm64`) or Intel (`darwin/amd64`) — no manual architecture selection needed.
+Installs the `local-data` binary plus Hadoop, Hive, Spark, and `jdk@17`, picking the right architecture automatically.
 
 ```bash
 brew install danieljhkim/tap/local-data
 ```
 
-Each GitHub release also publishes standalone `darwin_arm64` and `darwin_amd64` tarballs with per-artifact and combined (`SHA256SUMS.txt`) checksums, for anyone installing outside of Homebrew.
+Each GitHub release also publishes standalone `darwin_arm64` and `darwin_amd64` tarballs with per-artifact and combined (`SHA256SUMS.txt`) checksums.
 
-### Option 2: Build from Source
+### From source
 
 ```bash
+brew install go hadoop hive jdk@17 apache-spark
 git clone https://github.com/danieljhkim/local-data-platform.git
 cd local-data-platform
-make build
-
-# Install to $HOME/bin or $HOME/.local/bin (optional)
-make go-install
-
-# Install dependencies
-brew install go hadoop hive jdk@17 apache-spark
-
+make build          # → bin/local-data
+make install-user   # optional: copy to ~/bin or ~/.local/bin
 ```
 
-`status --json` writes one versioned JSON object to stdout. Its `schema_version`
-is currently `1`; `profile`, `services[].processes`, optional
-`services[].listeners`, and `errors` are stable machine-readable fields. A
-process with `running: false` or listener with `listening: false` is an observed
-stopped state. Collection and configuration failures appear in `errors` while
-available observations are retained, and cause a nonzero exit status. Process
-and listener observations do not establish that a dependency is ready.
-
-`env doctor --json` also writes exactly one versioned JSON object to stdout.
-Its schema is currently version `1` and contains only dependency observations:
-`target`, `dependencies.required`, `dependencies.optional`, `java`, and
-`result.healthy`. Required findings determine the command exit status and
-`result.healthy`; optional findings remain warnings. The report never includes
-environment values or credentials.
+Check your setup at any time:
 
 ```bash
-# Healthy preflight (exit 0)
-local-data env doctor --json
-# {"schema_version":1,"target":"general","dependencies":{"required":[{"command":"java","found":true},{"command":"brew","found":true}],"optional":[{"command":"curl","found":true},{"command":"spark-sql","found":true},{"command":"beeline","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":true}}
-
-# Missing required dependency (exit 1)
-local-data env doctor start hdfs --json
-# {"schema_version":1,"target":"start hdfs","dependencies":{"required":[{"command":"java","found":true},{"command":"hdfs","found":false}],"optional":[{"command":"curl","found":true},{"command":"jps","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":false}}
-
-# Missing optional dependency is still healthy (exit 0)
-local-data env doctor --json
-# {"schema_version":1,"target":"general","dependencies":{"required":[{"command":"java","found":true},{"command":"brew","found":true}],"optional":[{"command":"curl","found":true},{"command":"spark-sql","found":false},{"command":"beeline","found":true}]},"java":{"major":17,"recommended_major":17,"is_recommended":true},"result":{"healthy":true}}
+local-data env doctor             # general preflight
+local-data env doctor start hdfs  # preflight for a specific command
 ```
 
 ---
 
-## Quick Start
-
-By default, `local-data` uses Derby metastore, so no external DB setup is required.
-If you prefer Postgres/MySQL, see [METASTORE_SETUP.md](docs/METASTORE_SETUP.md).
+## Quick start
 
 ```bash
-# Initialize profiles + metastore schema using defaults
+# 1. Generate profiles and bootstrap the metastore (Derby by default)
 local-data init
 
-# Default values:
-#   - user: $USER
-#   - base-dir: $HOME/local-data-platform
-#   - db-type: derby
-#   - db-url: jdbc:derby:;databaseName=$BASE_DIR/state/hive/metastore_db;create=true
-#   - db-password: (empty)
-
-# initialize the metastore and profiles
-local-data init
-
-# Set active profile
+# 2. Pick a profile
+local-data profile set local   # Hive + Spark only
 local-data profile set hdfs    # HDFS + YARN + Hive + Spark
-local-data profile set local   # Hive + Spark only (no HDFS/YARN)
 
-# Preview overlay changes without activating a profile
-local-data profile diff hdfs
-
-# Start all services (HDFS → YARN → Hive) or (Hive only) depending on profile
+# 3. Start services (hdfs: HDFS → YARN → Hive; local: Hive only)
 local-data start
 
-# Run a query
+# 4. Use the stack
 local-data hive -e "SHOW DATABASES"
-
-# Start a PySpark shell
 local-data pyspark
-
-# Submit a Spark job
 local-data spark-submit my_job.py
 
-# Check service status
-local-data status
-
-# Consume status from a script (nonzero means collection/configuration errors)
-local-data status --json | jq '.services[] | {name, processes}'
-
-# View logs (selection follows the active profile, like `status`)
-local-data logs
-
-# View logs for one service only, regardless of active profile
-local-data logs hive
-
-# Control how many trailing lines are shown per log file (default 120)
-local-data logs hive --lines 50
-
-# Print that suffix, then continue streaming newly appended Hive log content
-local-data logs hive --follow --lines 20
-
-# List the selected log files without printing content
-local-data logs hive --lines 0
-
-# Stop all services (reverse order: Hive → YARN → HDFS)
+# 5. Stop services (reverse order)
 local-data stop
 ```
 
+`init` defaults: user `$USER`, base dir `$HOME/local-data-platform`, Derby metastore at `$BASE_DIR/state/hive/metastore_db`. Re-running `init` on an initialized base dir resumes metastore setup without overwriting your profiles. For Postgres or MySQL, see [docs/METASTORE_SETUP.md](docs/METASTORE_SETUP.md).
+
 ---
 
-## Settings Management
+## Profiles
 
-User settings are persisted at `$BASE_DIR/settings/setting.json` and control profile generation.
+| | `local` | `hdfs` |
+|---|---|---|
+| Services | Hive Metastore + HiveServer2 | NameNode, DataNode, ResourceManager, NodeManager, Hive Metastore + HiveServer2 |
+| Warehouse | `$BASE_DIR/state/hive/warehouse` | `/user/hive/warehouse` on HDFS |
+| Use when | Fast Hive/Spark development | You need a full cluster simulation |
 
 ```bash
-# List current settings
-local-data setting list
+local-data profile list
+local-data profile check
+local-data profile diff hdfs   # preview what `profile set hdfs` would change (secrets redacted)
+```
 
-# Update individual settings
+---
+
+## Everyday commands
+
+### Status and logs
+
+```bash
+local-data status                 # all services for the active profile
+local-data status --json          # versioned JSON; nonzero exit on collection errors
+
+local-data logs                   # follows the active profile, like `status`
+local-data logs hive              # one service, regardless of profile
+local-data logs hive --lines 50   # trailing lines per file (default 120, max 100000)
+local-data logs hive --lines 0    # list log files only
+local-data logs hive --follow     # print the tail, then stream new output
+```
+
+`logs` reads files by fixed path, so it works even when services are stopped or Hadoop/Hive/Spark binaries are missing. `--follow` picks up files created later, restarts after truncation or replacement, and labels each chunk with its source file.
+
+### Settings
+
+Settings live in `$BASE_DIR/settings/setting.json` and drive profile generation.
+
+```bash
+local-data setting list
 local-data setting set db-type postgres
 local-data setting set db-url "jdbc:postgresql://localhost:5432/my_metastore"
 
-# Set db-password without placing the secret in argv (prompt disables echo)
+# Passwords never go in argv: prompt (no echo), stdin, or file
 local-data setting set db-password
-# or: printenv METASTORE_PASSWORD | local-data setting set db-password --stdin
-# or: local-data setting set db-password --from-file "$HOME/.config/local-data/db-password"
+printenv METASTORE_PASSWORD | local-data setting set db-password --stdin
+local-data setting set db-password --from-file "$HOME/.config/local-data/db-password"
 
-# Show active profile config content
-local-data setting show hive     # prints hive-site.xml
-local-data setting show spark    # prints spark-defaults.conf + spark hive-site.xml
-local-data setting show hadoop   # prints Hadoop config files
+local-data setting show hive     # hive-site.xml
+local-data setting show spark    # spark-defaults.conf + Spark's hive-site.xml
+local-data setting show hadoop   # Hadoop config files
 ```
 
-Setting precedence (highest to lowest):
-1. CLI flags (`--db-url`, `--user`, `--db-type`) and secret-safe password input (`--db-password-file`, `--from-file`, `--stdin`, `LOCAL_DATA_DB_PASSWORD`, or prompt)
-2. Persisted settings (`$BASE_DIR/settings/setting.json`)
+Precedence, highest first:
+
+1. CLI flags (`--db-url`, `--user`, `--db-type`) and secret-safe password input (`--db-password-file`, `--from-file`, `--stdin`, `LOCAL_DATA_DB_PASSWORD`, or the prompt)
+2. Persisted settings
 3. Built-in defaults
+
+### Running other tools against the profile
+
+```bash
+local-data env print               # show the computed environment
+local-data env exec -- beeline ... # run any command with HADOOP_CONF_DIR, HIVE_CONF_DIR, and PATH set
+```
 
 ---
 
-## How It Works
+## How it works
 
-- Profiles are generated programmatically from Go structs (no hand-edited XML required)
-- `local-data init` generates profile templates under `$BASE_DIR/conf/profiles/` and bootstraps metastore schema
-- `local-data profile set <name>` materializes the runtime overlay under `$BASE_DIR/conf/current/`
-- `local-data profile diff <name>` previews the overlay `profile set` would activate without changing the active profile, runtime overlay, or settings. Password and credential values are redacted.
-- `local-data setting set <key> <value>` updates persisted settings and relevant profile/current Hive XML values
-- Every command computes and injects the environment for the active profile (hermetic execution)
-- Profiles live in `$BASE_DIR/conf/profiles/<name>/{hadoop,hive,spark}`
-- Wrapper commands (hdfs, hive, yarn, etc.) automatically use the overlay configuration
-- `local-data env exec -- <cmd...>` runs commands with `HADOOP_CONF_DIR`, `HIVE_CONF_DIR`, and `PATH` set to use the overlay
-- Services write logs to `$BASE_DIR/state/<service>/logs`
-- PID files are managed in `$BASE_DIR/state/<service>/pids`
-- `local-data logs [hdfs|yarn|hive] --lines N` selects services the same way `status` does (no argument follows the active profile: `local` shows Hive only, `hdfs` shows HDFS+YARN+Hive; an explicit service name always applies regardless of profile). `--lines` defaults to 120, accepts 0 for a metadata-only listing of the log files, and is bounded at 100000. Add `--follow` to print the initial suffix and keep streaming new content until interrupted. It follows files created after startup and resumes from the start after truncation or replacement; each emitted chunk is labelled with its source path. Log files are located by fixed on-disk path, so stopped services and missing Hadoop/Hive/Spark executables don't prevent existing logs from being tailed; a missing file is reported as such, and a read failure on one file doesn't suppress output from the others.
+```
+$BASE_DIR/                         # default: $HOME/local-data-platform
+├── conf/
+│   ├── profiles/<name>/{hadoop,hive,spark}   # generated by `init`
+│   └── current/                              # active overlay, written by `profile set`
+├── settings/setting.json
+└── state/<service>/{logs,pids}
+```
+
+- `init` generates profile templates from typed Go structs and bootstraps the metastore schema.
+- `profile set <name>` materializes the chosen profile into `conf/current/`.
+- `setting set` updates persisted settings and the affected Hive XML in both the profile and the active overlay.
+- Every command computes the active profile's environment and injects it, so wrappers and `env exec` never pick up stray system config.
 
 ---
 
 ## Development
 
-### Building
-
 ```bash
-# Build the binary
-make build
-
-# Run unit tests (no system dependencies)
-make test
-
-# Hermetic black-box tests (build the real CLI and use deterministic shims)
-make test-integration
-
-# Optional live macOS smoke test against installed services
-# Requires Homebrew Hadoop, Hive, Spark, Java 17, and idle default ports.
-make test-integration-live
-
-# Run tests with coverage
-make test-coverage
-
-# Format code
-make format
-
-# Run linters
-make vet
-make lint  # Requires golangci-lint
-
-# Clean build artifacts
-make clean
+make build                   # build bin/local-data
+make test                    # unit tests, no system dependencies
+make test-integration        # hermetic black-box tests (real binary + deterministic shims)
+make test-integration-live   # opt-in macOS smoke test against installed services
+make test-coverage           # unit tests with coverage report
+make format vet lint         # gofmt, go vet, golangci-lint
+make help                    # all targets
 ```
 
-The default integration lane isolates runtime state beneath a temporary
-`HOME`, builds the real `local-data` binary, and supplies deterministic command
-shims. It does not require Hadoop, Hive, Spark, Postgres, or MySQL to be
-installed. The live lane is deliberately opt-in: it uses a temporary `HOME`,
-bootstraps Derby, exercises local Hive, performs an HDFS write/read round trip,
-runs a small Spark job, and always attempts `local-data stop` during cleanup.
-Do not run the live lane while another local-data cluster owns the default
-service ports.
+The hermetic lane runs under a temporary `HOME` and needs none of Hadoop, Hive, Spark, Postgres, or MySQL. The live lane needs Homebrew Hadoop, Hive, Spark, and Java 17: it bootstraps Derby, exercises local Hive, round-trips an HDFS write/read, runs a small Spark job, and always attempts `local-data stop`. Don't run it while another local-data cluster holds the default ports.
 
 ### CI-equivalent checks
 
-GitHub Actions runs the following commands for every pull request and push to
-`main`. Run the same sequence locally before opening a pull request:
+CI runs this on every pull request and push to `main`; run it locally before opening a PR:
 
 ```bash
-gofmt -l $(git ls-files '*.go') | tee /tmp/gofmt.out
-test ! -s /tmp/gofmt.out
+gofmt -l $(git ls-files '*.go') | tee /tmp/gofmt.out && test ! -s /tmp/gofmt.out
 go vet ./...
 go test ./...
+make test-integration
 go test -race ./internal/...
 go build -o bin/local-data ./cmd/local-data
 bash test/release_workflow_security_test.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml
 ```
 
-The workflow deliberately disables dependency and build caching: pull-request
-code must not populate executable cache content later used by a trusted branch.
+CI deliberately disables dependency and build caching, so pull-request code can't seed cache content later used by a trusted branch.
 
-### Project Structure
+### Project layout
 
 ```
-local-data-platform/
-├── cmd/local-data/          # Main entry point
-├── internal/
-│   ├── cli/                 # Cobra CLI commands
-│   │   ├── env/             # env print/exec/doctor
-│   │   ├── profile/         # profile list/set/check/diff
-│   │   ├── setting/         # setting list/set/show
-│   │   ├── service/         # start/stop/status
-│   │   ├── wrappers/        # wrapper commands (hdfs, hive, yarn, etc.)
-│   │   ├── logs.go          # combined logs
-│   │   └── root.go          # root command wiring
-│   ├── config/              # config + profile management
-│   │   ├── generator/       # XML/conf generation + overrides merge
-│   │   ├── profiles/        # built-in profile definitions
-│   │   └── schema/          # typed config structs (Hadoop/Hive/Spark)
-│   ├── env/                 # environment detection + computation
-│   ├── metastore/           # metastore DB type detection + validation
-│   ├── service/             # service lifecycle (ProcessManager)
-│   │   ├── hdfs/
-│   │   ├── yarn/
-│   │   └── hive/
-│   └── util/                # shared helpers (fs/xml/shell/log/color)
-└── Makefile
+cmd/local-data/        # entry point
+internal/
+├── cli/               # Cobra commands: env, profile, setting, service, wrappers, logs, init
+├── config/            # profile management
+│   ├── generator/     # XML/conf generation + overrides merge
+│   ├── profiles/      # built-in profile definitions
+│   └── schema/        # typed Hadoop/Hive/Spark config structs
+├── env/               # environment detection + computation
+├── metastore/         # metastore DB type detection + validation
+├── service/           # service lifecycle (ProcessManager): hdfs, yarn, hive
+└── util/              # fs/xml/shell/log/color helpers
 ```
-
----
-
-## Configuration Profiles
-
-### Local Profile
-
-Uses local filesystem for Hive warehouse:
-- No HDFS required
-- Warehouse: `$BASE_DIR/state/hive/warehouse`
-- Faster startup, simpler setup
-- Good for Hive/Spark development
-
-### HDFS Profile
-
-Full Hadoop stack with HDFS:
-- HDFS NameNode + DataNode
-- YARN ResourceManager + NodeManager
-- Hive Metastore + HiveServer2
-- Warehouse on HDFS: `/user/hive/warehouse`
-- Complete cluster simulation
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Issues and pull requests are welcome.
 
-
-## Acknowledgments
-
-Built with:
-- Brew, Go, Cobra, and other great open-source softwares.
-
-Special thanks to:
-  - Claude Code (first time using it, and it's pretty good)
-
----
+Built with Go, Cobra, Homebrew, and the Apache Hadoop, Hive, and Spark projects — and with help from Claude Code.
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
