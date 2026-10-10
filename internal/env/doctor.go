@@ -174,9 +174,10 @@ func doctorCommandEnvironment() []string {
 
 func doctorRuntimeEnvironment() *Environment {
 	var selected []string
+	hiveHome := FindHiveHome()
 	environment := &Environment{
-		JavaHome:  NewJavaDetector().FindJavaHome(),
-		HiveHome:  FindHiveHome(),
+		JavaHome:  NewJavaDetector().FindJavaHomeForHive(hiveHome),
+		HiveHome:  hiveHome,
 		SparkHome: FindSparkHome(),
 	}
 
@@ -192,7 +193,7 @@ func doctorRuntimeEnvironment() *Environment {
 			selected = append(selected, filepath.Join(prefix, "bin"), filepath.Join(prefix, "sbin"))
 		}
 	}
-	if hiveHome := environment.HiveHome; hiveHome != "" {
+	if hiveHome != "" {
 		selected = append(selected, filepath.Join(hiveHome, "bin"))
 	}
 	if sparkHome := environment.SparkHome; sparkHome != "" {

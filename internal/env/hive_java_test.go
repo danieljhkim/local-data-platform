@@ -120,3 +120,86 @@ func TestJavaDetectorMeasuresSelectedRuntime(t *testing.T) {
 		}
 	})
 }
+
+func TestFindJavaHomeAutoSelectsHiveCompatibleJDK(t *testing.T) {
+	setup := func(t *testing.T, hiveMajor uint16, jdks map[string]string) (prefix, hiveHome string) {
+		t.Helper()
+		prefix = t.TempDir()
+		for name, version := range jdks {
+			home := javaHomeFixture(t, version)
+			if err := os.MkdirAll(filepath.Join(prefix, "opt"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(home, filepath.Join(prefix, "opt", name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hiveHome = t.TempDir()
+		writeHiveClassFixture(t, hiveHome, "hive-beeline-test.jar", "org/apache/hive/beeline/schematool/HiveSchemaTool.class", hiveClassHeader(hiveMajor))
+		old := homebrewPrefixes
+		homebrewPrefixes = []string{prefix}
+		t.Cleanup(func() { homebrewPrefixes = old })
+		t.Setenv("JAVA_HOME", "")
+		t.Setenv("PATH", t.TempDir())
+		return prefix, hiveHome
+	}
+
+	t.Run("Hive needing Java 21 skips the Java 17 default", func(t *testing.T) {
+		prefix, hive := setup(t, 65, map[string]string{"openjdk@17": "17.0.1", "openjdk@21": "21.0.2"})
+		got := NewJavaDetector().FindJavaHomeForHive(hive)
+		if want := filepath.Join(prefix, "opt", "openjdk@21"); got != want {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, want)
+		}
+	})
+	t.Run("lowest compatible version wins", func(t *testing.T) {
+		prefix, hive := setup(t, 65, map[string]string{"openjdk@25": "25.0.1", "openjdk@21": "21.0.2", "openjdk@17": "17.0.1"})
+		got := NewJavaDetector().FindJavaHomeForHive(hive)
+		if want := filepath.Join(prefix, "opt", "openjdk@21"); got != want {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, want)
+		}
+	})
+	t.Run("Java 17 default kept when Hive accepts it", func(t *testing.T) {
+		prefix, hive := setup(t, 61, map[string]string{"openjdk@17": "17.0.1", "openjdk@21": "21.0.2"})
+		got := NewJavaDetector().FindJavaHomeForHive(hive)
+		if want := filepath.Join(prefix, "opt", "openjdk@17"); got != want {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, want)
+		}
+	})
+	t.Run("unknown requirement keeps Java 17 default", func(t *testing.T) {
+		prefix, _ := setup(t, 65, map[string]string{"openjdk@17": "17.0.1", "openjdk@21": "21.0.2"})
+		got := NewJavaDetector().FindJavaHomeForHive("")
+		if want := filepath.Join(prefix, "opt", "openjdk@17"); got != want {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, want)
+		}
+	})
+	t.Run("only Java 17 installed fails closed on the default", func(t *testing.T) {
+		prefix, hive := setup(t, 65, map[string]string{"openjdk@17": "17.0.1"})
+		got := NewJavaDetector().FindJavaHomeForHive(hive)
+		if want := filepath.Join(prefix, "opt", "openjdk@17"); got != want {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, want)
+		}
+		if err := CheckHiveJava(&Environment{JavaHome: got, HiveHome: hive, Path: os.Getenv("PATH")}); err == nil {
+			t.Fatal("expected Java mismatch error")
+		}
+	})
+	t.Run("java on PATH is used when no Homebrew JDK fits", func(t *testing.T) {
+		_, hive := setup(t, 65, map[string]string{"openjdk@17": "17.0.1"})
+		pathHome := javaHomeFixture(t, "21.0.2")
+		t.Setenv("PATH", filepath.Join(pathHome, "bin"))
+		resolved, err := filepath.EvalSymlinks(pathHome)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := NewJavaDetector().FindJavaHomeForHive(hive); got != resolved {
+			t.Fatalf("FindJavaHomeForHive() = %q; want %q", got, resolved)
+		}
+	})
+	t.Run("explicit JAVA_HOME is never replaced", func(t *testing.T) {
+		_, hive := setup(t, 65, map[string]string{"openjdk@21": "21.0.2"})
+		explicit := javaHomeFixture(t, "17.0.1")
+		t.Setenv("JAVA_HOME", explicit)
+		if got := NewJavaDetector().FindJavaHomeForHive(hive); got != explicit {
+			t.Fatalf("FindJavaHomeForHive() = %q; want explicit %q", got, explicit)
+		}
+	})
+}

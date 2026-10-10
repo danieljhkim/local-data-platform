@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -43,30 +46,110 @@ func NewJavaDetector() *JavaDetector {
 	return &JavaDetector{}
 }
 
-// FindJavaHome honors an explicit JAVA_HOME, otherwise retaining the Java 17
-// default used by the Hadoop stack.
-// Checks both ARM (/opt/homebrew) and Intel (/usr/local) Homebrew prefixes.
+// homebrewPrefixes are the ARM and Intel Homebrew prefixes searched for JDKs.
+var homebrewPrefixes = []string{"/opt/homebrew", "/usr/local"}
+
+// FindJavaHome honors an explicit JAVA_HOME. Otherwise it keeps the Java 17
+// default used by the Hadoop stack unless the installed Hive needs a newer
+// Java, in which case it selects a compatible installed JDK.
 func (j *JavaDetector) FindJavaHome() string {
 	if home := os.Getenv("JAVA_HOME"); home != "" {
 		return home
 	}
-	candidates := []string{
-		"/opt/homebrew/opt/openjdk@17", // ARM Mac
-		"/usr/local/opt/openjdk@17",    // Intel Mac
+	return j.FindJavaHomeForHive(FindHiveHome())
+}
+
+// FindJavaHomeForHive is FindJavaHome for a caller that already knows HIVE_HOME.
+// An explicit JAVA_HOME is never replaced. With JAVA_HOME unset, the Java 17
+// default is kept when Hive accepts it (or its requirement is unknown);
+// otherwise the lowest installed Homebrew openjdk that satisfies Hive wins,
+// then the java on PATH. When nothing satisfies Hive, the Java 17 default is
+// returned so the Hive Java check reports the mismatch.
+func (j *JavaDetector) FindJavaHomeForHive(hiveHome string) string {
+	if home := os.Getenv("JAVA_HOME"); home != "" {
+		return home
 	}
-	for _, path := range candidates {
+	var fallback string
+	for _, prefix := range homebrewPrefixes {
+		path := filepath.Join(prefix, "opt", "openjdk@17")
 		if _, err := os.Stat(path); err == nil {
-			return path
+			fallback = path
+			break
 		}
 	}
-	return ""
+	required, err := HiveRequiredJavaMajor(hiveHome)
+	if err != nil || required == 0 {
+		return fallback
+	}
+	if fallback != "" && javaHomeMajor(fallback) >= required {
+		return fallback
+	}
+	for _, candidate := range installedJavaHomes() {
+		if javaHomeMajor(candidate) >= required {
+			return candidate
+		}
+	}
+	return fallback
+}
+
+// installedJavaHomes lists Homebrew openjdk@N installations in ascending
+// version order, then the unversioned openjdk, then the java found on PATH.
+func installedJavaHomes() []string {
+	var homes []string
+	for _, prefix := range homebrewPrefixes {
+		matches, _ := filepath.Glob(filepath.Join(prefix, "opt", "openjdk@*"))
+		sort.SliceStable(matches, func(a, b int) bool {
+			return openjdkSuffix(matches[a]) < openjdkSuffix(matches[b])
+		})
+		homes = append(homes, matches...)
+	}
+	for _, prefix := range homebrewPrefixes {
+		path := filepath.Join(prefix, "opt", "openjdk")
+		if _, err := os.Stat(path); err == nil {
+			homes = append(homes, path)
+		}
+	}
+	if home := pathJavaHome(); home != "" {
+		homes = append(homes, home)
+	}
+	return homes
+}
+
+// openjdkSuffix extracts N from .../openjdk@N so versions sort numerically.
+func openjdkSuffix(path string) int {
+	n, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(path), "openjdk@"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// pathJavaHome derives a JAVA_HOME from the java found on PATH, or "".
+func pathJavaHome() string {
+	java, err := ResolveExecutable("java", []string{"PATH=" + os.Getenv("PATH")})
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(java)
+	if err != nil || filepath.Base(resolved) != "java" {
+		return ""
+	}
+	bin := filepath.Dir(resolved)
+	if filepath.Base(bin) != "bin" {
+		return ""
+	}
+	return filepath.Dir(bin)
+}
+
+func javaHomeMajor(home string) int {
+	major, _ := selectedJavaMajor(&Environment{JavaHome: home, Path: os.Getenv("PATH")})
+	return major
 }
 
 // MajorVersion returns the major version of the installed Java
 // Returns 0 if the selected runtime cannot be measured.
 func (j *JavaDetector) MajorVersion() int {
-	major, _ := selectedJavaMajor(&Environment{JavaHome: j.FindJavaHome(), Path: os.Getenv("PATH")})
-	return major
+	return javaHomeMajor(j.FindJavaHome())
 }
 
 // IsInstalled checks if java command is available
@@ -200,12 +283,13 @@ type DetectionResult struct {
 
 // DetectEnvironment performs comprehensive environment detection
 func DetectEnvironment() (*DetectionResult, error) {
-	javaDetector := NewJavaDetector()
+	hiveHome := FindHiveHome()
+	javaHome := NewJavaDetector().FindJavaHomeForHive(hiveHome)
 
 	result := &DetectionResult{
-		JavaHome:  javaDetector.FindJavaHome(),
-		JavaMajor: javaDetector.MajorVersion(),
-		HiveHome:  FindHiveHome(),
+		JavaHome:  javaHome,
+		JavaMajor: javaHomeMajor(javaHome),
+		HiveHome:  hiveHome,
 		SparkHome: FindSparkHome(),
 	}
 
