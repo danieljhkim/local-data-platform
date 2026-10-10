@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-10-10
+
+### Changed
+- **Breaking:** Built-in `hdfs` and `local` profiles bind HiveServer2 (`hive.server2.thrift.bind.host`) and the metastore Thrift listener (`hive.metastore.thrift.bind.host`) to `127.0.0.1`, instead of wildcard-binding those unauthenticated sockets. Off-host clients stop connecting once the profile is regenerated with `profile init` or `profile set`; existing overlays are unchanged until then. `overrides.yaml` can set either property.
+- **Breaking:** The `hdfs` profile binds the DataNode transfer address (`dfs.datanode.address`) to `127.0.0.1:9866` and the DataNode IPC address (`dfs.datanode.ipc.address`) to `127.0.0.1:9867`; Hadoop's default for both was `0.0.0.0`. Off-host DataNode access stops after the profile is regenerated.
+- **Breaking:** `local-data` no longer treats the working directory, or its parent, as the repository root when that directory contains `conf/`. A project `bin/` found that way is no longer placed ahead of the installed Hadoop, Hive, and Spark tools; a repository `bin/` is prepended only when it is next to the installed binary.
+- **Breaking:** An explicit `JAVA_HOME` is honored, and `env doctor`, `init`, and Hive startup fail when the selected JVM cannot load the installed Hive schema tool, instead of reporting a Homebrew Java 17 directory as healthy. The unset-`JAVA_HOME` default is still that Java 17 directory; Homebrew Hive 4.2.1 needs Java 21 and now fails closed until `JAVA_HOME` points at a compatible JDK.
+- The PostgreSQL JDBC download named by the missing-driver diagnostic and `docs/METASTORE_SETUP.md` is pgJDBC 42.7.14. local-data still does not download the jar, and a compatible jar you already have remains accepted.
+
+### Fixed
+- Ctrl-C or SIGTERM during `local-data start` cancels a blocking NameNode format or Hive schema command before rolling back the services that run started, and still exits 130 (SIGINT) or 143 (SIGTERM).
+- `logs --follow` keeps lines appended between the initial tail and the start of follow.
+
 ## [0.4.1] - 2026-10-09
 
 ### Added
